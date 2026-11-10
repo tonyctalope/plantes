@@ -32,18 +32,27 @@ interface ClientRow {
 
 const LOOPBACK_HOSTS = new Set(['localhost', '127.0.0.1', '[::1]']);
 const MAX_DCR_CLIENTS = 500;
+const CIMD_FAILURE_CACHE_MS = 5 * 60 * 1000;
+const CIMD_STALE_GRACE_MS = 10 * 60 * 1000;
+/** client_id → time until which a failed metadata fetch is not retried. */
+const cimdFailures = new Map<string, number>();
 
 export function isLoopbackRedirect(url: URL): boolean {
   return url.protocol === 'http:' && LOOPBACK_HOSTS.has(url.hostname);
 }
 
+/** Exact host match; an entry starting with "." matches that domain's subdomains. */
 function hostAllowed(hostname: string, hosts: readonly string[]): boolean {
   const host = hostname.toLowerCase();
-  return hosts.some((allowed) => host === allowed || host.endsWith(`.${allowed}`));
+  return hosts.some((allowed) => (allowed.startsWith('.') ? host.endsWith(allowed) : host === allowed));
 }
 
-/** Returns an error message, or null when the redirect URI is acceptable. */
-export function checkRedirectUri(raw: string, httpsHosts: readonly string[] | 'any'): string | null {
+/**
+ * Returns an error message, or null when the redirect URI is acceptable:
+ * loopback http (Claude Code and other local clients) or one of the exact
+ * https callbacks configured (claude.ai / claude.com by default).
+ */
+export function checkRedirectUri(raw: string, allowedHttps: readonly string[]): string | null {
   let url: URL;
   try {
     url = new URL(raw);
@@ -54,9 +63,7 @@ export function checkRedirectUri(raw: string, httpsHosts: readonly string[] | 'a
   if (url.username || url.password) return 'redirect URIs must not contain credentials';
   if (isLoopbackRedirect(url)) return null;
   if (url.protocol !== 'https:') return `redirect URI must use https or a loopback http address: ${raw}`;
-  if (httpsHosts !== 'any' && !hostAllowed(url.hostname, httpsHosts)) {
-    return `redirect host ${url.hostname} is not allowed on this server`;
-  }
+  if (!allowedHttps.includes(url.href)) return `redirect URI ${raw} is not allowed on this server`;
   return null;
 }
 
@@ -116,8 +123,11 @@ export function registerClient(db: Db, config: Config, body: unknown): Record<st
   }
   const request = parsed.data;
   for (const uri of request.redirect_uris) {
-    const problem = checkRedirectUri(uri, config.oauth.redirectHosts);
-    if (problem) throw new OAuthFailure('invalid_redirect_uri', problem);
+    const problem = checkRedirectUri(uri, config.oauth.redirectUris);
+    if (problem) {
+      console.warn(`oauth: registration refused (${problem})`);
+      throw new OAuthFailure('invalid_redirect_uri', problem);
+    }
   }
   const authMethod = (request.token_endpoint_auth_method ?? 'client_secret_basic') as AuthMethod;
   if (!SUPPORTED_AUTH.includes(authMethod)) {
@@ -130,7 +140,17 @@ export function registerClient(db: Db, config: Config, body: unknown): Record<st
     throw new OAuthFailure('invalid_client_metadata', 'response_types must include code');
   }
   const count = get<{ n: number }>(db, "SELECT COUNT(*) AS n FROM oauth_clients WHERE kind = 'dcr'")?.n ?? 0;
-  if (count >= MAX_DCR_CLIENTS) throw new OAuthFailure('invalid_client_metadata', 'too many registered clients', 429);
+  if (count >= MAX_DCR_CLIENTS) {
+    // Full (spam?): make room by evicting the oldest client that was never authorized.
+    const evicted = run(
+      db,
+      `DELETE FROM oauth_clients WHERE client_id = (
+         SELECT client_id FROM oauth_clients WHERE kind = 'dcr'
+            AND client_id NOT IN (SELECT client_id FROM oauth_grants)
+          ORDER BY created_at LIMIT 1)`,
+    );
+    if (evicted.changes === 0) throw new OAuthFailure('invalid_client_metadata', 'too many registered clients', 429);
+  }
 
   const clientId = `plt_client_${randomToken(18)}`;
   const secret = authMethod === 'none' ? null : randomToken(32);
@@ -227,9 +247,10 @@ async function fetchClientMetadata(
   const method = doc.token_endpoint_auth_method ?? 'none';
   if (method !== 'none')
     throw new OAuthFailure('invalid_client', `token_endpoint_auth_method ${method} is not supported`);
-  for (const uri of doc.redirect_uris) {
-    const problem = checkRedirectUri(uri, 'any');
-    if (problem) throw new OAuthFailure('invalid_client', problem);
+  // Only Claude's callbacks and loopback, whatever else the document lists.
+  const redirectUris = doc.redirect_uris.filter((uri) => checkRedirectUri(uri, config.oauth.redirectUris) === null);
+  if (redirectUris.length === 0) {
+    throw new OAuthFailure('invalid_client', `none of the redirect URIs is allowed: ${doc.redirect_uris.join(', ')}`);
   }
   const expiresAt = new Date(Date.now() + cacheSeconds(response.headers.get('cache-control')) * 1000).toISOString();
   const name = doc.client_name || url.hostname;
@@ -241,7 +262,7 @@ async function fetchClientMetadata(
     {
       id: clientId,
       name,
-      uris: JSON.stringify(doc.redirect_uris),
+      uris: JSON.stringify(redirectUris),
       registration: JSON.stringify(doc),
       now: new Date().toISOString(),
       expires: expiresAt,
@@ -251,7 +272,7 @@ async function fetchClientMetadata(
     clientId,
     kind: 'cimd',
     clientName: name,
-    redirectUris: doc.redirect_uris,
+    redirectUris,
     authMethod: 'none',
     secretHash: null,
   };
@@ -267,8 +288,31 @@ export async function findClient(
   if (!clientId || clientId.length > 2000) throw new OAuthFailure('invalid_client', 'unknown client');
   const row = get<ClientRow>(db, 'SELECT * FROM oauth_clients WHERE client_id = :id', { id: clientId });
   if (clientId.startsWith('https://')) {
-    if (row && row.kind === 'cimd' && row.expires_at && Date.parse(row.expires_at) > Date.now()) return fromRow(row);
-    return fetchClientMetadata(db, config, clientId, fetchImpl);
+    const cached = row && row.kind === 'cimd' ? row : undefined;
+    if (cached?.expires_at && Date.parse(cached.expires_at) > Date.now()) return fromRow(cached);
+    const failedUntil = cimdFailures.get(clientId);
+    if (failedUntil && failedUntil > Date.now() && !cached) {
+      throw new OAuthFailure('invalid_client', 'client metadata document unavailable, retry later');
+    }
+    try {
+      const client = await fetchClientMetadata(db, config, clientId, fetchImpl);
+      cimdFailures.delete(clientId);
+      return client;
+    } catch (error) {
+      if (cimdFailures.size > 1000) cimdFailures.clear();
+      cimdFailures.set(clientId, Date.now() + CIMD_FAILURE_CACHE_MS);
+      if (cached && error instanceof OAuthFailure && /fetched|returned/.test(error.description)) {
+        // The client's host is down: keep using the last good document for a little while.
+        run(db, 'UPDATE oauth_clients SET expires_at = :expires WHERE client_id = :id', {
+          expires: new Date(Date.now() + CIMD_STALE_GRACE_MS).toISOString(),
+          id: clientId,
+        });
+        console.warn(`oauth: using stale metadata for ${clientId} (${error.description})`);
+        return fromRow(cached);
+      }
+      console.warn(`oauth: client metadata refused for ${clientId} (${(error as Error).message})`);
+      throw error;
+    }
   }
   if (!row || row.kind !== 'dcr') throw new OAuthFailure('invalid_client', 'unknown client');
   return fromRow(row);
@@ -302,11 +346,20 @@ export async function authenticateClient(
 }
 
 export function purgeClients(db: Db): void {
-  const cutoff = new Date(Date.now() - 30 * 24 * 3600 * 1000).toISOString();
+  const now = Date.now();
+  // Registered but never authorized within a week, or no live authorization for 30 days.
   run(
     db,
-    `DELETE FROM oauth_clients WHERE created_at < :cutoff
-       AND client_id NOT IN (SELECT client_id FROM oauth_grants WHERE revoked_at IS NULL)`,
-    { cutoff },
+    `DELETE FROM oauth_clients WHERE kind = 'dcr' AND (
+        (created_at < :week AND client_id NOT IN (SELECT client_id FROM oauth_grants))
+     OR (created_at < :month AND client_id NOT IN (SELECT client_id FROM oauth_grants WHERE revoked_at IS NULL)))`,
+    {
+      week: new Date(now - 7 * 24 * 3600 * 1000).toISOString(),
+      month: new Date(now - 30 * 24 * 3600 * 1000).toISOString(),
+    },
   );
+  run(db, "DELETE FROM oauth_clients WHERE kind = 'cimd' AND expires_at < :old", {
+    old: new Date(now - 30 * 24 * 3600 * 1000).toISOString(),
+  });
+  for (const [clientId, until] of cimdFailures) if (until <= now) cimdFailures.delete(clientId);
 }

@@ -3,7 +3,7 @@ import * as z from 'zod';
 import type { PlantSummary } from '../../shared/api.ts';
 import { get } from '../db/database.ts';
 import { addDays, isIsoDate, localDate, localTime } from '../lib/time.ts';
-import { createUploadLink, readThumbnail, UPLOAD_LINK_TTL_MS } from '../plants/photos.ts';
+import { createUploadLink, readThumbnail, UPLOAD_LINK_TTL_MS, UploadLinkLimitError } from '../plants/photos.ts';
 import { seasonOf } from '../plants/schedule.ts';
 import { CARE_TYPE, householdFieldsShape, plantFieldsSchema, plantFieldsShape } from '../plants/schema.ts';
 import {
@@ -23,6 +23,10 @@ import {
 import type { Deps } from '../types.ts';
 
 const VERSION = '1.0.0';
+const MAX_ACTIVE_PLANTS = 300;
+const MAX_PLANTS = 1000;
+/** Care events a single plant may receive per 24 h (a household waters a plant a few times a day at most). */
+const MAX_EVENTS_PER_DAY = 30;
 
 export interface McpCaller {
   userId: number;
@@ -118,11 +122,16 @@ export function buildMcpServer(deps: Deps, caller: McpCaller): McpServer {
     return row && !row.archived_at ? row : null;
   };
   const uploadInstructions = (plantId: number) => {
-    const { token, expiresAt } = createUploadLink(db, plantId, caller.userId);
+    let link;
+    try {
+      link = createUploadLink(db, plantId, caller.userId);
+    } catch (error) {
+      if (!(error instanceof UploadLinkLimitError)) throw error;
+      return { text: 'No photo link available right now (too many live links); try create_photo_upload_link later.' };
+    }
+    const { token, expiresAt } = link;
     const url = `${config.origin}/p/${token}`;
     return {
-      url,
-      expiresAt,
       text: [
         `photo_upload_url: ${url}  (valid until ${expiresAt}, up to 10 uploads)`,
         `- You can read the image file (Claude Code path, sandbox upload…): curl -fsS -F "photo=@<file>" "${url}"`,
@@ -204,6 +213,16 @@ export function buildMcpServer(deps: Deps, caller: McpCaller): McpServer {
     },
     async (input) => {
       const { notes, last_watered, ...fields } = input;
+      const counts = get<{ active: number; total: number }>(
+        db,
+        'SELECT COUNT(*) FILTER (WHERE archived_at IS NULL) AS active, COUNT(*) AS total FROM plants',
+      )!;
+      if (counts.active >= MAX_ACTIVE_PLANTS || counts.total >= MAX_PLANTS) {
+        return text(
+          `The collection is full (${counts.active} active / ${counts.total} total, max ${MAX_ACTIVE_PLANTS} / ${MAX_PLANTS}).`,
+          true,
+        );
+      }
       const duplicate = get<{ id: number }>(
         db,
         'SELECT id FROM plants WHERE archived_at IS NULL AND nickname = :nickname COLLATE NOCASE',
@@ -300,6 +319,15 @@ export function buildMcpServer(deps: Deps, caller: McpCaller): McpServer {
       const unknown = plant_ids.filter((id) => !findActive(id));
       if (unknown.length)
         return text(`Unknown or archived plant ids: ${unknown.join(', ')}. Nothing was recorded.`, true);
+      const since = new Date(deps.now().getTime() - 24 * 3600 * 1000).toISOString();
+      const busy = [...new Set(plant_ids)].filter(
+        (id) =>
+          (get<{ n: number }>(db, 'SELECT COUNT(*) AS n FROM care_events WHERE plant_id = :id AND at >= :since', {
+            id,
+            since,
+          })?.n ?? 0) >= MAX_EVENTS_PER_DAY,
+      );
+      if (busy.length) return text(`Too many care events in 24 h for plant ids: ${busy.join(', ')}.`, true);
       for (const id of new Set(plant_ids)) {
         addCareEvent(db, id, { type, at, userId: caller.userId, source: 'mcp', note: note ?? null });
       }

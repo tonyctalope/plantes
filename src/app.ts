@@ -1,5 +1,6 @@
 import { readFile } from 'node:fs/promises';
 import { Hono, type MiddlewareHandler } from 'hono';
+import { bodyLimit } from 'hono/body-limit';
 import { cors } from 'hono/cors';
 import { apiRoutes } from './api/routes.ts';
 import { authRoutes, sessionMiddleware } from './auth/routes.ts';
@@ -85,6 +86,17 @@ export function createApp(deps: Deps): Hono<AppEnv> {
 
   app.use('*', accessLog());
   app.use('*', securityHeaders(config));
+  // Small bodies everywhere; photo routes set their own limit after their auth
+  // checks, and /mcp is capped by the MCP SDK once the bearer token is verified.
+  const smallBody = bodyLimit({
+    maxSize: 256 * 1024,
+    onError: (c) => c.json({ error: 'too_large', message: 'Requête trop volumineuse.' }, 413),
+  });
+  app.use('*', async (c, next) => {
+    const path = c.req.path;
+    if (path === '/mcp' || path.startsWith('/p/') || /^\/api\/plants\/\d+\/photo$/.test(path)) return next();
+    return smallBody(c, next);
+  });
 
   app.get('/healthz', (c) => {
     get(db, 'SELECT 1 AS ok');
@@ -102,7 +114,8 @@ export function createApp(deps: Deps): Hono<AppEnv> {
   const mcp = mcpHandler(deps);
   app.all('/mcp', (c) => mcp(c));
 
-  for (const path of ['/oauth/register', '/oauth/token', '/oauth/revoke']) app.use(path, openCors);
+  // Not /oauth/register: browsers have no business registering clients (drive-by spam).
+  for (const path of ['/oauth/token', '/oauth/revoke']) app.use(path, openCors);
 
   // Everything below knows the browser session.
   app.use('*', sessionMiddleware(deps));

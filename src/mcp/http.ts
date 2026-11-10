@@ -9,6 +9,7 @@ import type { Context } from 'hono';
 import { protectedResourceMetadataUrl } from '../oauth/metadata.ts';
 import { SCOPE } from '../oauth/errors.ts';
 import { verifyAccessToken } from '../oauth/tokens.ts';
+import { RateLimiter } from '../lib/http.ts';
 import { allowlist, type AppEnv, type Deps } from '../types.ts';
 import { buildMcpServer, callerFromAuth } from './server.ts';
 
@@ -27,7 +28,12 @@ export function mcpHandler(deps: Deps) {
           scopes: access.scopes,
           expiresAt: access.expiresAt,
           resource: new URL(access.resource),
-          extra: { userId: access.userId, email: access.email, clientName: access.clientName },
+          extra: {
+            userId: access.userId,
+            email: access.email,
+            clientName: access.clientName,
+            grantId: access.grantId,
+          },
         };
       },
     },
@@ -41,11 +47,18 @@ export function mcpHandler(deps: Deps) {
       if (!caller) throw new Error('MCP request without a verified caller');
       return buildMcpServer(deps, caller);
     },
-    { onerror: (error) => console.error('mcp error:', error.message) },
+    { onerror: (error) => console.error('mcp error:', error.message), maxRequestBodySize: 1024 * 1024 },
   );
+  // A leaked token must not be able to flood the database.
+  const perGrant = new RateLimiter(120, 60_000);
   return async (c: Context<AppEnv>) => {
     const auth = await gate(c.req.raw);
     if (auth instanceof Response) return auth;
+    if (!perGrant.take(String(auth.extra?.grantId))) {
+      return c.json({ error: 'rate_limited', message: 'Too many requests for this connection, slow down.' }, 429, {
+        'Retry-After': '60',
+      });
+    }
     return handler.fetch(c.req.raw, { authInfo: auth });
   };
 }

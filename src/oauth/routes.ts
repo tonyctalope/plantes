@@ -9,6 +9,7 @@ import { OAuthFailure, SCOPE } from './errors.ts';
 import {
   deletePendingRequest,
   exchangeCode,
+  hasRoomForPendingRequest,
   issueCode,
   loadPendingRequest,
   refreshTokens,
@@ -125,6 +126,7 @@ export function oauthRoutes(deps: Deps): Hono<AppEnv> {
       return back('invalid_target', `unknown resource, expected ${config.mcpResource}`);
     }
     if (q.state !== undefined && q.state.length > 2000) return back('invalid_request', 'state is too long');
+    if (!hasRoomForPendingRequest(db)) return errorPage(c, 429, 'Trop de demandes', 'Réessaie dans quelques minutes.');
     const requestId = savePendingRequest(db, {
       clientId: client.clientId,
       redirectUri,

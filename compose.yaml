@@ -13,6 +13,8 @@ services:
     volumes:
       - ./data:/data
     read_only: true
+    mem_limit: 768m
+    pids_limit: 256
     tmpfs:
       - /tmp
     cap_drop:

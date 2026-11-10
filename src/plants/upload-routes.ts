@@ -3,7 +3,7 @@ import { bodyLimit } from 'hono/body-limit';
 import { messagePage } from '../pages/layout.ts';
 import { uploadPage } from '../pages/upload.ts';
 import { clientIp, RateLimiter } from '../lib/http.ts';
-import type { AppEnv, Deps } from '../types.ts';
+import { allowlist, type AppEnv, type Deps } from '../types.ts';
 import { countUpload, deletePhoto, MAX_PHOTO_BYTES, PhotoError, resolveUploadLink, storePhoto } from './photos.ts';
 import { getPlantRow, setPlantPhoto } from './store.ts';
 
@@ -14,6 +14,7 @@ const wantsHtml = (c: Context) => (c.req.header('accept') ?? '').includes('text/
 
 export function uploadRoutes(deps: Deps): Hono<AppEnv> {
   const { db, config } = deps;
+  const isAllowed = allowlist(config);
   const app = new Hono<AppEnv>();
   const limiter = new RateLimiter(30, 3600_000);
 
@@ -39,7 +40,7 @@ export function uploadRoutes(deps: Deps): Hono<AppEnv> {
         );
 
   app.get('/:token', (c) => {
-    const link = resolveUploadLink(db, c.req.param('token'));
+    const link = resolveUploadLink(db, c.req.param('token'), isAllowed);
     const plant = link ? getPlantRow(db, link.plantId) : undefined;
     if (!link || !plant || plant.archived_at) return invalid(c);
     return c.html(
@@ -54,6 +55,14 @@ export function uploadRoutes(deps: Deps): Hono<AppEnv> {
 
   app.post(
     '/:token',
+    // Cheap checks first: never read a body for an unknown link or a flooding client.
+    async (c, next) => {
+      if (!limiter.take(clientIp(c))) return c.json({ error: 'rate_limited', message: 'Too many uploads.' }, 429);
+      const link = resolveUploadLink(db, c.req.param('token'), isAllowed);
+      const plant = link ? getPlantRow(db, link.plantId) : undefined;
+      if (!link || !plant || plant.archived_at) return invalid(c);
+      await next();
+    },
     bodyLimit({
       maxSize: MAX_PHOTO_BYTES + 64 * 1024,
       onError: (c) =>
@@ -62,9 +71,8 @@ export function uploadRoutes(deps: Deps): Hono<AppEnv> {
           : c.json({ error: 'too_large', message: 'Photo too large (20 MB max).' }, 413),
     }),
     async (c) => {
-      if (!limiter.take(clientIp(c))) return c.json({ error: 'rate_limited', message: 'Too many uploads.' }, 429);
       const token = c.req.param('token');
-      const link = resolveUploadLink(db, token);
+      const link = resolveUploadLink(db, token, isAllowed);
       const plant = link ? getPlantRow(db, link.plantId) : undefined;
       if (!link || !plant || plant.archived_at) return invalid(c);
 

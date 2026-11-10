@@ -19,9 +19,9 @@ export interface Config {
   /** Months (1–12, inclusive) that use the growing-season watering interval. */
   growingMonths: { from: number; to: number };
   oauth: {
-    /** HTTPS hosts allowed as redirect URIs for dynamically registered clients. */
-    redirectHosts: readonly string[];
-    /** Hosts trusted to serve Client ID Metadata Documents. */
+    /** Exact https redirect URIs accepted for MCP clients (besides loopback). */
+    redirectUris: readonly string[];
+    /** Hosts trusted to serve Client ID Metadata Documents (".example.com" = its subdomains). */
     cimdHosts: readonly string[];
     accessTokenTtlSec: number;
     refreshTokenTtlSec: number;
@@ -127,7 +127,19 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     householdContext: (env.HOUSEHOLD_CONTEXT ?? '').trim(),
     growingMonths: parseMonths(env.GROWING_SEASON_MONTHS),
     oauth: {
-      redirectHosts: list(env.OAUTH_REDIRECT_HOSTS ?? 'claude.ai,claude.com').map((h) => h.toLowerCase()),
+      redirectUris: list(
+        env.OAUTH_REDIRECT_URIS ?? 'https://claude.ai/api/mcp/auth_callback,https://claude.com/api/mcp/auth_callback',
+      ).map((uri) => {
+        let parsed: URL;
+        try {
+          parsed = new URL(uri);
+        } catch {
+          throw new ConfigError(`OAUTH_REDIRECT_URIS: invalid URL ${uri}`);
+        }
+        if (parsed.protocol !== 'https:' || parsed.hash)
+          throw new ConfigError(`OAUTH_REDIRECT_URIS: ${uri} must be https`);
+        return parsed.href;
+      }),
       cimdHosts: list(env.OAUTH_CIMD_HOSTS ?? 'claude.ai,claude.com,anthropic.com').map((h) => h.toLowerCase()),
       accessTokenTtlSec: positiveInt(env.OAUTH_ACCESS_TOKEN_TTL, 3600, 'OAUTH_ACCESS_TOKEN_TTL'),
       refreshTokenTtlSec: positiveInt(env.OAUTH_REFRESH_TOKEN_TTL, 90 * 24 * 3600, 'OAUTH_REFRESH_TOKEN_TTL'),

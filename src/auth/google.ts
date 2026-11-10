@@ -51,6 +51,12 @@ export function createGoogleProvider(
       const state = oidc.randomState();
       const nonce = oidc.randomNonce();
       const verifier = oidc.randomPKCECodeVerifier();
+      if ((get<{ n: number }>(db, 'SELECT COUNT(*) AS n FROM login_states')?.n ?? 0) >= 5000) {
+        run(db, 'DELETE FROM login_states WHERE expires_at <= :now', { now: new Date().toISOString() });
+        if ((get<{ n: number }>(db, 'SELECT COUNT(*) AS n FROM login_states')?.n ?? 0) >= 5000) {
+          throw new LoginError('Trop de connexions en cours, réessaie dans quelques minutes.');
+        }
+      }
       run(
         db,
         `INSERT INTO login_states (state_hash, nonce, code_verifier, next_path, expires_at)

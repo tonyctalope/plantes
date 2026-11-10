@@ -15,6 +15,23 @@ const CODE_TTL_MS = 2 * 60 * 1000;
 /** A rotated refresh token may be replayed this long (client retry / concurrent refresh) before it counts as theft. */
 const REFRESH_REUSE_GRACE_MS = 60 * 1000;
 
+/**
+ * Successor of each refresh token rotated in the last minute, kept in memory
+ * only (never on disk): a replay inside the grace window gets the very same
+ * successor back instead of minting another live refresh token.
+ */
+const recentRotations = new Map<string, { tokens: TokenResponse; accessExpiresAt: number; until: number }>();
+
+function rememberRotation(hash: string, tokens: TokenResponse): void {
+  const now = Date.now();
+  for (const [key, entry] of recentRotations) if (entry.until <= now) recentRotations.delete(key);
+  recentRotations.set(hash, {
+    tokens,
+    accessExpiresAt: now + tokens.expires_in * 1000,
+    until: now + REFRESH_REUSE_GRACE_MS,
+  });
+}
+
 export interface TokenTtls {
   accessTokenTtlSec: number;
   refreshTokenTtlSec: number;
@@ -40,6 +57,16 @@ export interface PendingRequest {
 }
 
 // --- pending authorization requests (between /authorize and the consent form)
+
+const MAX_PENDING_REQUESTS = 5000;
+
+/** Anonymous clients create these rows: keep the table bounded. */
+export function hasRoomForPendingRequest(db: Db): boolean {
+  const count = () => get<{ n: number }>(db, 'SELECT COUNT(*) AS n FROM oauth_requests')?.n ?? 0;
+  if (count() < MAX_PENDING_REQUESTS) return true;
+  run(db, 'DELETE FROM oauth_requests WHERE expires_at <= :now', { now: new Date().toISOString() });
+  return count() < MAX_PENDING_REQUESTS;
+}
 
 export function savePendingRequest(db: Db, request: Omit<PendingRequest, 'sessionHash'>): string {
   const id = randomToken(24);
@@ -180,7 +207,8 @@ function issueTokens(db: Db, grantId: string, scope: string, ttl: TokenTtls): To
   };
 }
 
-function sameResource(a: string, b: string): boolean {
+/** The requested resource names the granted one (our MCP endpoint), or its bare origin like /authorize accepts. */
+function sameResource(requested: string, granted: string): boolean {
   const normalise = (value: string) => {
     try {
       const url = new URL(value);
@@ -189,7 +217,13 @@ function sameResource(a: string, b: string): boolean {
       return value;
     }
   };
-  return normalise(a) === normalise(b);
+  const wanted = normalise(requested);
+  if (wanted === normalise(granted)) return true;
+  try {
+    return wanted === new URL(granted).origin.toLowerCase();
+  } catch {
+    return false;
+  }
 }
 
 export function exchangeCode(
@@ -297,8 +331,15 @@ export function refreshTokens(
     if (!row || row.revoked_at) return fail('invalid refresh token');
     if (row.client_id !== client.clientId) return fail('refresh token was issued to another client');
     if (Date.parse(row.expires_at) <= Date.now()) return fail('refresh token expired');
-    if (row.rotated_at && Date.now() - Date.parse(row.rotated_at) > REFRESH_REUSE_GRACE_MS) {
+    if (row.rotated_at) {
+      const replay = recentRotations.get(hash);
+      if (Date.now() - Date.parse(row.rotated_at) <= REFRESH_REUSE_GRACE_MS && replay && !row.revoked_at) {
+        // Lost response or concurrent refresh: answer with the same successor.
+        const expiresIn = Math.max(1, Math.round((replay.accessExpiresAt - Date.now()) / 1000));
+        return { ok: true, tokens: { ...replay.tokens, expires_in: expiresIn } };
+      }
       revokeGrantInternal(db, row.grant_id);
+      recentRotations.delete(hash);
       return fail('refresh token already used; the authorization was revoked');
     }
     if (!isAllowed(row.email)) {
@@ -320,11 +361,11 @@ export function refreshTokens(
       }
     }
     const now = new Date().toISOString();
-    if (!row.rotated_at) {
-      run(db, 'UPDATE oauth_tokens SET rotated_at = :now WHERE token_hash = :hash', { now, hash });
-    }
+    run(db, 'UPDATE oauth_tokens SET rotated_at = :now WHERE token_hash = :hash', { now, hash });
     run(db, 'UPDATE oauth_grants SET last_used_at = :now WHERE id = :id', { now, id: row.grant_id });
-    return { ok: true, tokens: issueTokens(db, row.grant_id, row.scope, ttl) };
+    const tokens = issueTokens(db, row.grant_id, row.scope, ttl);
+    rememberRotation(hash, tokens);
+    return { ok: true, tokens };
   });
 }
 

@@ -202,4 +202,36 @@ export const MIGRATIONS: readonly string[] = [
 
   ALTER TABLE photo_upload_tokens ADD COLUMN set_cover INTEGER NOT NULL DEFAULT 0;
   `,
+
+  /* 3 — never reuse photo / care event ids (a stale screen must not delete someone else's new entry) */ `
+  CREATE TABLE plant_photos_v3 (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    plant_id INTEGER NOT NULL REFERENCES plants(id) ON DELETE CASCADE,
+    stem TEXT NOT NULL UNIQUE,
+    taken_at TEXT NOT NULL,
+    user_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
+    source TEXT NOT NULL,
+    note TEXT
+  );
+  INSERT INTO plant_photos_v3 (id, plant_id, stem, taken_at, user_id, source, note)
+    SELECT id, plant_id, stem, taken_at, user_id, source, note FROM plant_photos;
+  DROP TABLE plant_photos;
+  ALTER TABLE plant_photos_v3 RENAME TO plant_photos;
+  CREATE INDEX plant_photos_plant ON plant_photos(plant_id, taken_at);
+
+  CREATE TABLE care_events_v3 (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    plant_id INTEGER NOT NULL REFERENCES plants(id) ON DELETE CASCADE,
+    type TEXT NOT NULL,
+    at TEXT NOT NULL,
+    user_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
+    source TEXT NOT NULL,
+    note TEXT
+  );
+  INSERT INTO care_events_v3 (id, plant_id, type, at, user_id, source, note)
+    SELECT id, plant_id, type, at, user_id, source, note FROM care_events;
+  DROP TABLE care_events;
+  ALTER TABLE care_events_v3 RENAME TO care_events;
+  CREATE INDEX care_events_plant ON care_events(plant_id, type, at);
+  `,
 ];

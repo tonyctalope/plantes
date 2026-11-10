@@ -51,9 +51,7 @@ export const plantFieldsShape = {
   watering_instructions: text(1000).describe(
     'How to water: soil check first (e.g. "top 3 cm dry"), method, drainage, water quality, signs of thirst or excess.',
   ),
-  water_amount: optionalText(200).describe(
-    "Rough amount for the current pot, e.g. \"≈ 300 ml, jusqu'à ce que l'eau s'écoule par le fond\".",
-  ),
+  water_amount: optionalText(200).describe('Rough amount for the current pot, SHORT (shown as a pill): "≈ 300 ml".'),
   humidity: HUMIDITY.optional().describe('Air humidity it prefers.'),
   humidity_notes: optionalText(600),
   temp_min_c: z.number().min(-40).max(40).optional().describe('Lowest temperature it tolerates, °C.'),

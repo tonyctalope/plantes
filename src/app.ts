@@ -94,7 +94,7 @@ export function createApp(deps: Deps): Hono<AppEnv> {
   });
   app.use('*', async (c, next) => {
     const path = c.req.path;
-    if (path === '/mcp' || path.startsWith('/p/') || /^\/api\/plants\/\d+\/photo$/.test(path)) return next();
+    if (path === '/mcp' || path.startsWith('/p/') || /^\/api\/plants\/\d+\/photos?$/.test(path)) return next();
     return smallBody(c, next);
   });
 

@@ -16,6 +16,19 @@ export const lightLabel: Record<Light, string> = {
   low: 'Faible luminosité',
 };
 
+/** Tile values: the tile label ("Lumière") gives the context. */
+export const lightShort: Record<Light, string> = {
+  full_sun: 'Plein soleil',
+  bright_indirect: 'Vive indirecte',
+  medium_indirect: 'Moyenne',
+  low: 'Faible',
+};
+
+/** Filled steps of the light (4), humidity (3) and difficulty (3) meters. */
+export const lightLevel: Record<Light, number> = { low: 1, medium_indirect: 2, bright_indirect: 3, full_sun: 4 };
+export const humidityLevel: Record<Humidity, number> = { low: 1, medium: 2, high: 3 };
+export const difficultyLevel: Record<Difficulty, number> = { easy: 1, moderate: 2, hard: 3 };
+
 export const lightHint: Record<Light, string> = {
   full_sun: 'Plusieurs heures de soleil direct par jour.',
   bright_indirect: 'Beaucoup de clarté, sans soleil direct sur les feuilles.',
@@ -43,6 +56,13 @@ export const toxicityShort: Record<Toxicity, string> = {
   unknown: 'Toxicité ?',
 };
 
+export const toxicityTile: Record<Toxicity, string> = {
+  non_toxic: 'Sans danger',
+  mildly_toxic: 'Un peu toxique',
+  toxic: 'Toxique',
+  unknown: 'Inconnue',
+};
+
 export const difficultyLabel: Record<Difficulty, string> = {
   easy: 'Facile',
   moderate: 'Intermédiaire',
@@ -53,6 +73,12 @@ export const confidenceLabel: Record<Confidence, string> = {
   high: 'Identification sûre',
   medium: 'Identification probable',
   low: 'Identification incertaine',
+};
+
+export const confidenceShort: Record<Confidence, string> = {
+  high: 'Sûre',
+  medium: 'Probable',
+  low: 'Incertaine',
 };
 
 export const careLabel: Record<CareType, string> = {
@@ -79,4 +105,9 @@ export const seasonLabel: Record<Season, string> = {
 export const seasonName: Record<Season, string> = {
   growing: 'croissance',
   rest: 'repos',
+};
+
+export const seasonShort: Record<Season, string> = {
+  growing: 'Avr → sept',
+  rest: 'Oct → mars',
 };

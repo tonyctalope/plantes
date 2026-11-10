@@ -4,34 +4,34 @@ import {
   ArchiveRestore,
   Bell,
   BellOff,
-  Bug,
   Camera,
   Check,
   Droplet,
   Droplets,
   FlaskConical,
-  Flower2,
   ImagePlus,
-  Lightbulb,
-  Package,
-  PawPrint,
+  Images,
   Pencil,
   Plus,
-  ScanSearch,
-  Scissors,
-  Shovel,
+  Sprout,
   StickyNote,
-  Sun,
-  Thermometer,
   Trash2,
-  Waves,
   X,
 } from 'lucide-react';
 import { useRef, useState, type FormEvent, type ReactNode } from 'react';
-import type { CareEvent, PlantDetail, PlantPatch } from '../../../shared/api.ts';
+import type { CareEvent, PlantDetail, PlantPatch, PlantPhoto } from '../../../shared/api.ts';
 import { PageContainer, ToxicBadge, TopBar, waterTone } from '../components/bits.tsx';
+import { CareGuide, Essentials } from '../components/care.tsx';
 import { CareIcon } from '../components/CareIcon.tsx';
 import { useConfirm } from '../components/Dialog.tsx';
+import {
+  AddPhotoSheet,
+  JournalEmpty,
+  PhotoGrid,
+  PhotoInput,
+  PhotoViewer,
+  type PhotoDraft,
+} from '../components/photos.tsx';
 import { ArchiveSheet, CareSheet, SnoozeSheet, type CareDraft } from '../components/sheets.tsx';
 import { useToast } from '../components/Toast.tsx';
 import {
@@ -44,41 +44,21 @@ import {
   Spinner,
   Switch,
   toneClasses,
-  type Tone,
 } from '../components/ui.tsx';
 import { api, errorMessage } from '../lib/api.ts';
 import {
   capitalize,
   dueText,
-  everyNDays,
   formatDate,
   formatDateTime,
   formatDayShort,
+  plural,
   relativeDays,
-  temperatureRange,
 } from '../lib/format.ts';
 import { useDocumentTitle, useOnForeground, useResource } from '../lib/hooks.ts';
-import { prepareImage } from '../lib/image.ts';
-import {
-  careLabel,
-  confidenceLabel,
-  difficultyLabel,
-  humidityLabel,
-  lightHint,
-  lightLabel,
-  seasonLabel,
-  sourceLabel,
-  toxicityLabel,
-} from '../lib/labels.ts';
+import { careLabel, sourceLabel } from '../lib/labels.ts';
 import { useMe } from '../lib/me.tsx';
 import { navigate } from '../lib/router.tsx';
-
-const toxicityTone: Record<PlantDetail['toxicityPets'], Tone> = {
-  toxic: 'danger',
-  mildly_toxic: 'warn',
-  non_toxic: 'brand',
-  unknown: 'neutral',
-};
 
 const inputClass =
   'h-11 w-full rounded-2xl border border-line bg-surface px-3.5 text-ink placeholder:text-ink-3 focus:border-brand focus:outline-none';
@@ -93,7 +73,11 @@ export function PlantPage({ id }: { id: number }) {
 
   const [busy, setBusy] = useState<null | 'water' | 'fertilize' | 'unarchive'>(null);
   const [sheet, setSheet] = useState<null | 'snooze' | 'care' | 'archive'>(null);
-  const [uploadProgress, setUploadProgress] = useState<number | null>(null);
+  // Photo journal: the file waiting in the "Ajouter une photo" sheet (a new key
+  // per pick resets the sheet) and the photo open in the viewer.
+  const [pendingPhoto, setPendingPhoto] = useState<File | null>(null);
+  const [photoSheetKey, setPhotoSheetKey] = useState(0);
+  const [viewerPhotoId, setViewerPhotoId] = useState<number | null>(null);
   const fileInput = useRef<HTMLInputElement>(null);
 
   if (!plant) {
@@ -116,6 +100,10 @@ export function PlantPage({ id }: { id: number }) {
   }
 
   const current: PlantDetail = plant;
+  if (viewerPhotoId !== null && !current.photos.some((photo) => photo.id === viewerPhotoId)) {
+    // The photo went away (deleted elsewhere, then refreshed): close the viewer for good.
+    setViewerPhotoId(null);
+  }
   const tz = me.timezone;
   const today = me.today;
   const archived = current.archivedAt !== null;
@@ -192,18 +180,41 @@ export function PlantPage({ id }: { id: number }) {
     if (ok) await removeEvent(event.id, "Soin retiré de l'historique");
   }
 
-  async function onPhotoChosen(file: File) {
-    setUploadProgress(0);
-    try {
-      const prepared = await prepareImage(file);
-      setData(await api.uploadPhoto(id, prepared, setUploadProgress));
-      toast({ message: 'Photo mise à jour', tone: 'success' });
-    } catch (reason) {
-      toast({ message: errorMessage(reason), tone: 'error' });
-    } finally {
-      setUploadProgress(null);
-      if (fileInput.current) fileInput.current.value = '';
-    }
+  function choosePhoto(file: File) {
+    setPhotoSheetKey((key) => key + 1);
+    setPendingPhoto(file);
+  }
+
+  async function addPhoto(draft: PhotoDraft, onProgress: (fraction: number) => void, signal: AbortSignal) {
+    const replacesCover = draft.cover && current.photo !== null;
+    const detail = await api.addPhoto(id, draft.file, { note: draft.note, cover: draft.cover }, onProgress, signal);
+    setPendingPhoto(null);
+    setData(detail);
+    const added = detail.photos[0];
+    toast({
+      message: replacesCover ? 'Photo ajoutée et définie comme principale' : 'Photo ajoutée au journal',
+      tone: 'success',
+      action: added ? { label: 'Voir', onClick: () => setViewerPhotoId(added.id) } : undefined,
+    });
+  }
+
+  async function setCoverPhoto(photo: PlantPhoto) {
+    setData(await api.patchPhoto(id, photo.id, { cover: true }));
+  }
+
+  async function savePhotoNote(photo: PlantPhoto, note: string | null) {
+    setData(await api.patchPhoto(id, photo.id, { note }));
+  }
+
+  async function deletePhoto(photo: PlantPhoto) {
+    const photos = current.photos;
+    const index = photos.findIndex((item) => item.id === photo.id);
+    // Stay in the viewer on the next (older) photo, else the previous one.
+    const neighbour = photos[index + 1] ?? photos[index - 1];
+    const detail = await api.deletePhoto(id, photo.id);
+    setViewerPhotoId(neighbour?.id ?? null);
+    setData(detail);
+    if (!neighbour) toast({ message: 'Photo supprimée', tone: 'success' });
   }
 
   async function archive(reason: string | undefined) {
@@ -211,7 +222,7 @@ export function PlantPage({ id }: { id: number }) {
       await api.archive(id, reason);
       navigate('/', { replace: true });
       toast({
-        message: `« ${current.nickname} » est archivée`,
+        message: `« ${current.nickname} » est archivée`,
         tone: 'success',
         action: {
           label: 'Annuler',
@@ -242,9 +253,9 @@ export function PlantPage({ id }: { id: number }) {
 
   async function remove() {
     const ok = await confirm({
-      title: `Supprimer « ${current.nickname} » ?`,
+      title: `Supprimer « ${current.nickname} » ?`,
       message:
-        'Sa fiche, sa photo et tout son historique seront effacés définitivement. Pour en garder une trace, archive-la plutôt.',
+        'Sa fiche, ses photos et tout son historique seront effacés définitivement. Pour en garder une trace, archive-la plutôt.',
       confirmLabel: 'Supprimer définitivement',
       tone: 'danger',
     });
@@ -258,11 +269,11 @@ export function PlantPage({ id }: { id: number }) {
     }
   }
 
-  const pickPhoto = () => fileInput.current?.click();
+  // Archived plants keep their journal (viewable, editable) but take no new photos (server rule).
+  const pickPhoto = archived ? undefined : () => fileInput.current?.click();
   const water = current.water;
-  const care = current.care;
-  const tempRange = temperatureRange(care.tempMinC, care.tempMaxC);
-  const toxicTone = toxicityTone[current.toxicityPets];
+  const photos = current.photos;
+  const coverPhoto = photos.find((photo) => photo.isCover) ?? photos[0];
 
   return (
     <>
@@ -271,33 +282,44 @@ export function PlantPage({ id }: { id: number }) {
         title={current.nickname}
         heading={false}
         right={
-          <IconButton label={current.photo ? 'Changer la photo' : 'Ajouter une photo'} onClick={pickPhoto}>
-            <Camera />
-          </IconButton>
+          pickPhoto && (
+            <IconButton label="Ajouter une photo" onClick={pickPhoto}>
+              <Camera />
+            </IconButton>
+          )
         }
       />
-      <input
-        ref={fileInput}
-        type="file"
-        accept="image/*"
-        className="sr-only"
-        tabIndex={-1}
-        aria-hidden
-        onChange={(event) => {
-          const file = event.target.files?.[0];
-          if (file) void onPhotoChosen(file);
-        }}
-      />
+      <PhotoInput inputRef={fileInput} onFile={choosePhoto} />
       <PageContainer>
-        {/* Photo */}
+        {/* Main photo */}
         <div className="relative overflow-hidden rounded-[1.75rem] bg-surface-2">
-          {current.photo ? (
+          {current.photo && coverPhoto ? (
+            <button
+              type="button"
+              onClick={() => setViewerPhotoId(coverPhoto.id)}
+              aria-label={`Voir les photos de ${current.nickname} (${plural(photos.length, 'photo', 'photos')})`}
+              className="group block w-full"
+            >
+              <img
+                src={current.photo.full}
+                alt=""
+                className="aspect-[4/3] w-full object-cover transition group-hover:brightness-[.97] sm:aspect-[16/9]"
+              />
+              <span
+                aria-hidden
+                className="absolute right-3 bottom-3 inline-flex items-center gap-1.5 rounded-full bg-black/55 px-2.5 py-1 text-sm font-semibold text-white tabular-nums backdrop-blur-sm"
+              >
+                <Images className="size-4" />
+                {photos.length}
+              </span>
+            </button>
+          ) : current.photo ? (
             <img
               src={current.photo.full}
               alt={`Photo de ${current.nickname}`}
               className="aspect-[4/3] w-full object-cover sm:aspect-[16/9]"
             />
-          ) : (
+          ) : pickPhoto ? (
             <button
               type="button"
               onClick={pickPhoto}
@@ -308,20 +330,12 @@ export function PlantPage({ id }: { id: number }) {
                 <span className="font-semibold">Ajouter une photo</span>
               </span>
             </button>
-          )}
-          {uploadProgress !== null && (
-            <div className="absolute inset-0 grid place-items-center bg-black/45 text-white" role="status">
-              <div className="w-2/3 max-w-xs">
-                <p className="mb-2 text-center font-semibold">
-                  Envoi de la photo… {Math.round(uploadProgress * 100)} %
-                </p>
-                <div className="h-2 overflow-hidden rounded-full bg-white/30">
-                  <div
-                    className="h-full rounded-full bg-white transition-[width]"
-                    style={{ width: `${Math.round(uploadProgress * 100)}%` }}
-                  />
-                </div>
-              </div>
+          ) : (
+            <div
+              aria-hidden
+              className="grid aspect-[4/3] w-full place-items-center bg-gradient-to-b from-brand-soft to-surface-2 text-brand-strong sm:aspect-[16/9]"
+            >
+              <Sprout className="size-12 opacity-60" strokeWidth={1.6} />
             </div>
           )}
         </div>
@@ -343,8 +357,7 @@ export function PlantPage({ id }: { id: number }) {
           <p className="text-[15px] text-ink-3 italic">{current.scientificName}</p>
           <div className="mt-3 flex flex-wrap items-center gap-2">
             <RoomEditor room={current.room} onSave={(room) => patch({ room })} />
-            <Badge>{care.indoor ? 'Intérieur' : 'Extérieur'}</Badge>
-            {care.difficulty && <Badge>{difficultyLabel[care.difficulty]}</Badge>}
+            <Badge>{current.care.indoor ? 'Intérieur' : 'Extérieur'}</Badge>
             <ToxicBadge toxicity={current.toxicityPets} />
           </div>
         </section>
@@ -440,115 +453,43 @@ export function PlantPage({ id }: { id: number }) {
           </Card>
         )}
 
+        {/* At a glance */}
+        <section aria-labelledby="essentials-title" className="mt-8">
+          <SectionTitle id="essentials-title">L'essentiel</SectionTitle>
+          <Essentials plant={current} />
+        </section>
+
+        {/* Photo journal */}
+        <section aria-labelledby="journal-title" className="mt-8">
+          <SectionTitle
+            id="journal-title"
+            aside={
+              pickPhoto &&
+              photos.length > 0 && (
+                <Button size="sm" variant="soft" icon={<ImagePlus />} onClick={pickPhoto}>
+                  Ajouter une photo
+                </Button>
+              )
+            }
+          >
+            Journal photo
+          </SectionTitle>
+          {photos.length > 0 ? (
+            <PhotoGrid photos={photos} timeZone={tz} today={today} onOpen={(photo) => setViewerPhotoId(photo.id)} />
+          ) : (
+            <JournalEmpty onAdd={pickPhoto} />
+          )}
+        </section>
+
         {/* Care sheet */}
         <section aria-labelledby="care-title" className="mt-8">
           <SectionTitle id="care-title">Fiche d'entretien</SectionTitle>
-          <div className="grid gap-3 sm:grid-cols-2">
-            <InfoCard icon={<Sun />} title="Lumière" tone="warn">
-              <p className="font-semibold text-ink">{lightLabel[care.light]}</p>
-              <p>{lightHint[care.light]}</p>
-              {care.lightNotes && <Text>{care.lightNotes}</Text>}
-            </InfoCard>
-
-            <InfoCard icon={<Droplets />} title="Arrosage" tone="water">
-              <Text>{care.wateringInstructions}</Text>
-              {care.waterAmount && (
-                <p>
-                  <span className="font-semibold text-ink">Quantité : </span>
-                  {care.waterAmount}
-                </p>
-              )}
-              <IntervalEditor plant={current} onSave={(update) => patch(update, 'Fréquence mise à jour')} />
-            </InfoCard>
-
-            {(care.humidity || care.humidityNotes) && (
-              <InfoCard icon={<Waves />} title="Humidité" tone="water">
-                {care.humidity && <p className="font-semibold text-ink">{humidityLabel[care.humidity]}</p>}
-                {care.humidityNotes && <Text>{care.humidityNotes}</Text>}
-              </InfoCard>
-            )}
-
-            {(tempRange || care.temperatureNotes) && (
-              <InfoCard icon={<Thermometer />} title="Température" tone="warn">
-                {tempRange && <p className="font-semibold text-ink">{tempRange}</p>}
-                {care.temperatureNotes && <Text>{care.temperatureNotes}</Text>}
-              </InfoCard>
-            )}
-
-            {care.soil && (
-              <InfoCard icon={<Shovel />} title="Substrat" tone="neutral">
-                <Text>{care.soil}</Text>
-              </InfoCard>
-            )}
-
-            {(care.fertilizing || current.lastFertilizedAt) && (
-              <InfoCard icon={<FlaskConical />} title="Engrais" tone="brand">
-                {care.fertilizing && <Text>{care.fertilizing}</Text>}
-                {current.lastFertilizedAt && (
-                  <p className="text-sm text-ink-3">
-                    Dernier apport : {relativeDays(current.lastFertilizedAt, tz, today)} (
-                    {formatDate(current.lastFertilizedAt, tz)}).
-                  </p>
-                )}
-              </InfoCard>
-            )}
-
-            {care.repotting && (
-              <InfoCard icon={<Flower2 />} title="Rempotage" tone="brand">
-                <Text>{care.repotting}</Text>
-              </InfoCard>
-            )}
-
-            {care.pruning && (
-              <InfoCard icon={<Scissors />} title="Taille" tone="brand">
-                <Text>{care.pruning}</Text>
-              </InfoCard>
-            )}
-
-            <InfoCard icon={<PawPrint />} title="Animaux" tone={toxicTone}>
-              <p className="font-semibold text-ink">{toxicityLabel[current.toxicityPets]}</p>
-              {care.toxicityNotes && <Text>{care.toxicityNotes}</Text>}
-            </InfoCard>
-
-            {care.commonProblems && (
-              <InfoCard icon={<Bug />} title="Problèmes fréquents" tone="danger">
-                <Text>{care.commonProblems}</Text>
-              </InfoCard>
-            )}
-
-            {care.tips && (
-              <InfoCard icon={<Lightbulb />} title="Conseils" tone="warn">
-                <Text>{care.tips}</Text>
-              </InfoCard>
-            )}
-
-            {care.pot && (
-              <InfoCard icon={<Package />} title="Pot" tone="neutral">
-                <Text>{care.pot}</Text>
-              </InfoCard>
-            )}
-
-            <InfoCard icon={<ScanSearch />} title="Identification" tone="neutral">
-              <p>
-                <Badge
-                  tone={
-                    care.identificationConfidence === 'high'
-                      ? 'brand'
-                      : care.identificationConfidence === 'medium'
-                        ? 'warn'
-                        : 'danger'
-                  }
-                >
-                  {confidenceLabel[care.identificationConfidence]}
-                </Badge>
-              </p>
-              <p>
-                <span className="italic">{current.scientificName}</span>
-                {care.family ? ` · famille des ${care.family}` : ''}
-              </p>
-              {care.identificationNotes && <Text>{care.identificationNotes}</Text>}
-            </InfoCard>
-          </div>
+          <CareGuide
+            plant={current}
+            timeZone={tz}
+            today={today}
+            onSaveIntervals={(update) => patch(update, 'Fréquence mise à jour')}
+          />
         </section>
 
         {/* Household notes */}
@@ -631,9 +572,6 @@ export function PlantPage({ id }: { id: number }) {
                   }
                 />
               </div>
-              <ActionRow icon={<Camera />} onClick={pickPhoto}>
-                {current.photo ? 'Changer la photo' : 'Ajouter une photo'}
-              </ActionRow>
               {archived ? (
                 <ActionRow icon={<ArchiveRestore />} onClick={() => void unarchive()}>
                   Restaurer la plante
@@ -675,37 +613,28 @@ export function PlantPage({ id }: { id: number }) {
         onClose={() => setSheet(null)}
         onArchive={archive}
       />
+      <AddPhotoSheet
+        key={photoSheetKey}
+        file={pendingPhoto}
+        plantName={current.nickname}
+        hasCover={current.photo !== null}
+        onClose={() => setPendingPhoto(null)}
+        onFileChange={setPendingPhoto}
+        onUpload={addPhoto}
+      />
+      <PhotoViewer
+        photos={photos}
+        photoId={viewerPhotoId}
+        plantName={current.nickname}
+        timeZone={tz}
+        today={today}
+        onSelect={setViewerPhotoId}
+        onClose={() => setViewerPhotoId(null)}
+        onSetCover={setCoverPhoto}
+        onSaveNote={savePhotoNote}
+        onDelete={deletePhoto}
+      />
     </>
-  );
-}
-
-function Text({ children }: { children: string }) {
-  return <p className="whitespace-pre-line">{children}</p>;
-}
-
-function InfoCard({
-  icon,
-  title,
-  tone = 'brand',
-  children,
-}: {
-  icon: ReactNode;
-  title: string;
-  tone?: Tone;
-  children: ReactNode;
-}) {
-  return (
-    <Card className="p-4 sm:p-5">
-      <div className="flex items-center gap-3">
-        <span
-          className={`grid size-9 shrink-0 place-items-center rounded-xl [&_svg]:size-[1.125rem] ${toneClasses(tone)}`}
-        >
-          {icon}
-        </span>
-        <h3 className="font-semibold">{title}</h3>
-      </div>
-      <div className="mt-3 space-y-2 text-[15px] leading-relaxed text-ink-2">{children}</div>
-    </Card>
   );
 }
 
@@ -880,102 +809,6 @@ function RoomEditor({ room, onSave }: { room: string; onSave: (room: string) => 
       <IconButton size="sm" label="Annuler" onClick={() => setEditing(false)}>
         <X />
       </IconButton>
-    </form>
-  );
-}
-
-function IntervalEditor({ plant, onSave }: { plant: PlantDetail; onSave: (patch: PlantPatch) => Promise<boolean> }) {
-  const [editing, setEditing] = useState(false);
-  const [growing, setGrowing] = useState(String(plant.care.waterIntervalGrowing));
-  const [rest, setRest] = useState(String(plant.care.waterIntervalRest));
-  const [saving, setSaving] = useState(false);
-  const season = plant.water.season;
-
-  if (!editing) {
-    return (
-      <div className="mt-1 rounded-2xl bg-surface-2/70 p-3">
-        <div className="flex items-start justify-between gap-2">
-          <dl className="grid flex-1 grid-cols-[auto_1fr] gap-x-3 gap-y-1.5 text-[15px]">
-            {(['growing', 'rest'] as const).map((key) => (
-              <div key={key} className="contents">
-                <dt className="text-ink-3">{seasonLabel[key]}</dt>
-                <dd className={key === season ? 'font-semibold text-ink' : ''}>
-                  {everyNDays(key === 'growing' ? plant.care.waterIntervalGrowing : plant.care.waterIntervalRest)}
-                  {key === season && (
-                    <Badge tone="water" className="ml-2 align-middle">
-                      en ce moment
-                    </Badge>
-                  )}
-                </dd>
-              </div>
-            ))}
-          </dl>
-          <IconButton
-            size="sm"
-            label="Modifier la fréquence d'arrosage"
-            onClick={() => {
-              setGrowing(String(plant.care.waterIntervalGrowing));
-              setRest(String(plant.care.waterIntervalRest));
-              setEditing(true);
-            }}
-          >
-            <Pencil />
-          </IconButton>
-        </div>
-      </div>
-    );
-  }
-
-  async function submit(event: FormEvent) {
-    event.preventDefault();
-    const nextGrowing = Number(growing);
-    const nextRest = Number(rest);
-    if (!Number.isInteger(nextGrowing) || !Number.isInteger(nextRest) || nextGrowing < 1 || nextRest < 1) return;
-    setSaving(true);
-    const ok = await onSave({ waterIntervalGrowing: nextGrowing, waterIntervalRest: nextRest });
-    setSaving(false);
-    if (ok) setEditing(false);
-  }
-
-  return (
-    <form onSubmit={(event) => void submit(event)} className="mt-1 space-y-3 rounded-2xl bg-surface-2/70 p-3">
-      <p className="text-sm text-ink-3">Arroser tous les combien de jours ?</p>
-      <div className="grid grid-cols-2 gap-3">
-        <label className="block">
-          <span className="mb-1 block text-sm font-semibold">{seasonLabel.growing}</span>
-          <input
-            type="number"
-            inputMode="numeric"
-            min={1}
-            max={90}
-            required
-            value={growing}
-            onChange={(event) => setGrowing(event.target.value)}
-            className={inputClass}
-          />
-        </label>
-        <label className="block">
-          <span className="mb-1 block text-sm font-semibold">{seasonLabel.rest}</span>
-          <input
-            type="number"
-            inputMode="numeric"
-            min={1}
-            max={90}
-            required
-            value={rest}
-            onChange={(event) => setRest(event.target.value)}
-            className={inputClass}
-          />
-        </label>
-      </div>
-      <div className="flex justify-end gap-2">
-        <Button size="sm" variant="outline" onClick={() => setEditing(false)}>
-          Annuler
-        </Button>
-        <Button size="sm" type="submit" loading={saving}>
-          Enregistrer
-        </Button>
-      </div>
     </form>
   );
 }

@@ -49,7 +49,7 @@ export function Archives() {
   async function remove(plant: PlantSummary) {
     const ok = await confirm({
       title: `Supprimer « ${plant.nickname} » ?`,
-      message: 'Sa fiche, sa photo et son historique seront effacés définitivement.',
+      message: 'Sa fiche, ses photos et son historique seront effacés définitivement.',
       confirmLabel: 'Supprimer définitivement',
       tone: 'danger',
     });

@@ -161,6 +161,12 @@
     animation: fade-in 200ms ease-out;
   }
 
+  /* The full-screen photo viewer: the page behind it must not scroll (nor pull to refresh). */
+  :root:has(dialog[data-fullscreen][open]) {
+    overflow: hidden;
+    overscroll-behavior: none;
+  }
+
   input[type='number']::-webkit-inner-spin-button {
     opacity: 1;
   }

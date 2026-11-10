@@ -6,7 +6,7 @@ import type { PlantDetail } from '../shared/api.ts';
 import { migrate } from '../src/db/database.ts';
 import { MIGRATIONS } from '../src/db/migrations.ts';
 import { createPlant, getPlantRow, toDetail, updatePlant } from '../src/plants/store.ts';
-import { browser, login, plantFields, sampleJpeg, setup, TONY, type TestContext } from './helpers.ts';
+import { browser, largeJpeg, login, plantFields, sampleJpeg, setup, TONY, type TestContext } from './helpers.ts';
 
 describe('photo journal and structured care details', () => {
   let ctx: TestContext;
@@ -78,6 +78,29 @@ describe('photo journal and structured care details', () => {
     await upload('/photos');
     await ctx.app.request(`/api/plants/${plantId}`, { method: 'DELETE', headers: browser(ctx, tony.cookie) });
     expect(files()).toBe(0);
+  });
+
+  it('accepts real-size phone photos and never reuses photo ids', async () => {
+    const big = await largeJpeg();
+    expect(big.byteLength).toBeGreaterThan(300 * 1024);
+    const form = new FormData();
+    form.append('photo', new Blob([new Uint8Array(big)], { type: 'image/jpeg' }), 'big.jpg');
+    const response = await ctx.app.request(`/api/plants/${plantId}/photos`, {
+      method: 'POST',
+      headers: { cookie: tony.cookie, origin: ctx.deps.config.origin },
+      body: form,
+    });
+    expect(response.status).toBe(200);
+    const withBig = (await response.json()) as PlantDetail;
+    const second = await upload('/photos');
+    const newestId = second.photos[0]!.id;
+    await ctx.app.request(`/api/plants/${plantId}/photos/${newestId}`, {
+      method: 'DELETE',
+      headers: browser(ctx, tony.cookie),
+    });
+    const third = await upload('/photos');
+    expect(third.photos[0]!.id).toBeGreaterThan(newestId);
+    expect(withBig.photos).toHaveLength(1);
   });
 
   it('maps structured details and merges partial updates', () => {

@@ -148,3 +148,14 @@ export function hiddenInputs(page: string): Record<string, string> {
   }
   return result;
 }
+
+/** A ~1 MB JPEG (random noise compresses badly), bigger than the global 256 KB body limit. */
+export async function largeJpeg(): Promise<Buffer> {
+  const width = 1200;
+  const height = 900;
+  const pixels = Buffer.alloc(width * height * 3);
+  for (let i = 0; i < pixels.length; i++) pixels[i] = (i * 2654435761) >>> 24;
+  return sharp(pixels, { raw: { width, height, channels: 3 } })
+    .jpeg({ quality: 92 })
+    .toBuffer();
+}

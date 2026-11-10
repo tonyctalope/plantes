@@ -115,6 +115,53 @@ export function everyNDays(days: number): string {
   return days === 1 ? 'tous les jours' : `tous les ${days} jours`;
 }
 
+const NBSP = '\u00a0';
+
+/** "tous les 8 j" (chips and tiles). */
+export function everyNDaysShort(days: number): string {
+  return days === 1 ? 'tous les jours' : `tous les ${days}${NBSP}j`;
+}
+
+/**
+ * French typography for care texts: no line break inside "avril → mai", "13–15",
+ * "50 %", "18 °C", "≈ 400 ml" or "15 min".
+ */
+export function typo(text: string): string {
+  return text
+    .replace(/ → /g, `${NBSP}→${NBSP}`)
+    .replace(/ (?=[%°])/g, NBSP)
+    .replace(/≈ /g, `≈${NBSP}`)
+    .replace(/(\d)–(?=\d)/g, '$1–\u2060')
+    .replace(/(\d) (?=(?:ml|cl|L|l|cm|mm|m|min|h|j)\b)/g, `$1${NBSP}`);
+}
+
+/** typo() applied to every string of a plain object (the care sheet). */
+export function typoDeep<T>(value: T): T {
+  if (typeof value === 'string') return typo(value) as T;
+  if (Array.isArray(value)) return value.map((item: unknown) => typoDeep(item)) as T;
+  if (value && typeof value === 'object') {
+    return Object.fromEntries(Object.entries(value).map(([key, item]) => [key, typoDeep(item)])) as T;
+  }
+  return value;
+}
+
+/** Photo thumbnails: "12 nov." this year, "nov. 2025" for older years. */
+export function formatShortDate(iso: string, timeZone: string, today: string): string {
+  const date = new Date(iso);
+  const sameYear = dateKey(date, timeZone).slice(0, 4) === today.slice(0, 4);
+  const options: Intl.DateTimeFormatOptions = sameYear
+    ? { day: 'numeric', month: 'short', timeZone }
+    : { month: 'short', year: 'numeric', timeZone };
+  return new Intl.DateTimeFormat('fr-FR', options).format(date);
+}
+
+/** "12 novembre 2026" */
+export function formatDateLong(iso: string, timeZone: string): string {
+  return new Intl.DateTimeFormat('fr-FR', { day: 'numeric', month: 'long', year: 'numeric', timeZone }).format(
+    new Date(iso),
+  );
+}
+
 export function plural(count: number, singular: string, pluralForm: string): string {
   return `${count} ${count > 1 ? pluralForm : singular}`;
 }
@@ -141,10 +188,11 @@ export function initials(user: Pick<UserSummary, 'name' | 'email'>): string {
   return letters.toLocaleUpperCase('fr-FR');
 }
 
+/** "15–27 °C", "au moins 12 °C"… */
 export function temperatureRange(min: number | null, max: number | null): string | null {
-  const fmt = (n: number) => `${Number.isInteger(n) ? n : n.toFixed(1).replace('.', ',')} °C`;
-  if (min !== null && max !== null) return `${fmt(min).replace(' °C', '')} – ${fmt(max)}`;
-  if (min !== null) return `au moins ${fmt(min)}`;
-  if (max !== null) return `au plus ${fmt(max)}`;
+  const fmt = (n: number) => (Number.isInteger(n) ? String(n) : n.toFixed(1).replace('.', ','));
+  if (min !== null && max !== null) return `${fmt(min)}–${fmt(max)}${NBSP}°C`;
+  if (min !== null) return `au moins ${fmt(min)}${NBSP}°C`;
+  if (max !== null) return `au plus ${fmt(max)}${NBSP}°C`;
   return null;
 }

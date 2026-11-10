@@ -4,6 +4,7 @@ import type {
   CareRequest,
   ConnectionsResponse,
   MeResponse,
+  PhotoPatch,
   PlantDetail,
   PlantPatch,
   PlantsResponse,
@@ -88,8 +89,17 @@ async function request<T>(method: string, path: string, body?: unknown, signal?:
 }
 
 /** multipart upload with progress (fetch cannot report upload progress). */
-function upload<T>(path: string, form: FormData, onProgress?: (fraction: number) => void): Promise<T> {
+function upload<T>(
+  path: string,
+  form: FormData,
+  onProgress?: (fraction: number) => void,
+  signal?: AbortSignal,
+): Promise<T> {
   return new Promise<T>((resolve, reject) => {
+    if (signal?.aborted) {
+      reject(new DOMException('Envoi annulé', 'AbortError'));
+      return;
+    }
     const xhr = new XMLHttpRequest();
     xhr.open('POST', path);
     xhr.setRequestHeader('Accept', 'application/json');
@@ -114,6 +124,7 @@ function upload<T>(path: string, form: FormData, onProgress?: (fraction: number)
     };
     xhr.onerror = () => reject(new ApiError(0, 'network', 'Envoi impossible. Vérifie ta connexion internet.'));
     xhr.onabort = () => reject(new DOMException('Envoi annulé', 'AbortError'));
+    signal?.addEventListener('abort', () => xhr.abort(), { once: true });
     xhr.send(form);
   });
 }
@@ -151,11 +162,25 @@ export const api = {
 
   deletePlant: (id: number) => request<void>('DELETE', `/api/plants/${id}`),
 
-  uploadPhoto: (id: number, file: File, onProgress?: (fraction: number) => void) => {
+  /** Adds a photo to the plant's journal (`cover`: also make it the main photo). */
+  addPhoto: (
+    id: number,
+    file: File,
+    options: { note?: string; cover?: boolean } = {},
+    onProgress?: (fraction: number) => void,
+    signal?: AbortSignal,
+  ) => {
     const form = new FormData();
     form.append('photo', file, file.name);
-    return upload<PlantDetail>(`/api/plants/${id}/photo`, form, onProgress);
+    if (options.note) form.append('note', options.note);
+    if (options.cover) form.append('cover', '1');
+    return upload<PlantDetail>(`/api/plants/${id}/photos`, form, onProgress, signal);
   },
+
+  patchPhoto: (id: number, photoId: number, patch: PhotoPatch) =>
+    request<PlantDetail>('PATCH', `/api/plants/${id}/photos/${photoId}`, patch),
+
+  deletePhoto: (id: number, photoId: number) => request<PlantDetail>('DELETE', `/api/plants/${id}/photos/${photoId}`),
 
   saveSettings: (settings: UserSettings) => request<UserSettings>('PUT', '/api/settings', settings),
 

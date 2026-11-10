@@ -1,4 +1,4 @@
-import { AlarmClock, BellOff, Check, Droplet, Droplets, Settings, Sprout } from 'lucide-react';
+import { AlarmClock, BellOff, Check, Droplet, Droplets, Images, Settings, Sprout } from 'lucide-react';
 import { useMemo, useState } from 'react';
 import type { PlantDetail, PlantSummary } from '../../../shared/api.ts';
 import { AvatarStack, Logo, PageContainer, PlantThumb, ToxicBadge, TopBar, WaterBadge } from '../components/bits.tsx';
@@ -423,6 +423,16 @@ function PlantCard({ plant, today, timeZone }: { plant: PlantSummary; today: str
               </span>
             )}
           </div>
+          {plant.photoCount > 1 && (
+            <span
+              className="absolute right-2 bottom-2 inline-flex items-center gap-1 rounded-full bg-black/50 px-2 py-0.5 text-xs font-semibold text-white tabular-nums backdrop-blur"
+              title={`${plant.photoCount} photos dans le journal`}
+            >
+              <Images className="size-3.5" aria-hidden />
+              {plant.photoCount}
+              <span className="sr-only"> photos</span>
+            </span>
+          )}
         </div>
         <div className="p-3">
           <p className="truncate leading-snug font-semibold">{plant.nickname}</p>

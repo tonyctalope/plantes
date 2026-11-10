@@ -128,12 +128,12 @@ export function IconLink({
   );
 }
 
+/** The card surface, for elements other than a <div> (sections, list items…). */
+export const cardClass = 'rounded-3xl border border-line/80 bg-surface shadow-[0_1px_2px_rgb(0_0_0/0.04)]';
+
 export function Card({ className = '', children, ...rest }: HTMLAttributes<HTMLDivElement>) {
   return (
-    <div
-      className={`rounded-3xl border border-line/80 bg-surface shadow-[0_1px_2px_rgb(0_0_0/0.04)] ${className}`}
-      {...rest}
-    >
+    <div className={`${cardClass} ${className}`} {...rest}>
       {children}
     </div>
   );

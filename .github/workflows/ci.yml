@@ -1,0 +1,114 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAME: ${{ github.repository }}
+  NODE_VERSION: '26'
+
+jobs:
+  quality:
+    name: Format · Types · Build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+      - run: npm ci
+      - name: Check formatting
+        run: npm run format:check
+      - name: Typecheck (server + web)
+        run: npm run typecheck
+      - name: Build the web app
+        run: npm run build
+
+  test:
+    name: Tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+      - run: npm ci
+      - run: npm test
+
+  docker:
+    name: Docker image
+    needs: [quality, test]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v7
+      - uses: docker/setup-qemu-action@v4
+      - uses: docker/setup-buildx-action@v4
+
+      - name: Docker metadata
+        id: meta
+        uses: docker/metadata-action@v6
+        with:
+          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          tags: |
+            type=ref,event=branch
+            type=ref,event=pr
+            type=semver,pattern={{version}}
+            type=sha,format=short
+            type=raw,value=latest,enable={{is_default_branch}}
+
+      - name: Build image for the smoke test
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          load: true
+          tags: plantes:smoke
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Smoke test — the image starts, serves the app, the OAuth metadata and guards /mcp
+        run: |
+          set -euo pipefail
+          docker run -d --name plantes -p 8787:8787 \
+            -e PUBLIC_URL=http://localhost:8787 -e ALLOWED_EMAILS=ci@example.com \
+            -e GOOGLE_CLIENT_ID=ci -e GOOGLE_CLIENT_SECRET=ci plantes:smoke
+          for i in $(seq 1 30); do curl -fsS http://localhost:8787/healthz && break; sleep 1; done
+          curl -fsS http://localhost:8787/.well-known/oauth-authorization-server | grep -q '"issuer":"http://localhost:8787"'
+          curl -fsS -o /dev/null -w '%{content_type}\n' http://localhost:8787/ | grep -q text/html
+          test "$(curl -s -o /dev/null -w '%{http_code}' -X POST http://localhost:8787/mcp)" = 401
+          docker logs plantes
+          # Refuses to start without its configuration, with a readable message.
+          if docker run --rm plantes:smoke; then echo "expected a configuration error" >&2; exit 1; fi
+
+      - name: Log in to GHCR
+        if: github.event_name != 'pull_request'
+        uses: docker/login-action@v4
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push the multi-arch image
+        if: github.event_name != 'pull_request'
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          annotations: ${{ steps.meta.outputs.annotations }}
+          cache-from: type=gha

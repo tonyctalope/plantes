@@ -1,0 +1,39 @@
+# Example deployment behind Traefik (see README « Déploiement »).
+# Put the secrets in .env next to this file (see .env.example).
+services:
+  plantes:
+    image: ghcr.io/tonyctalope/plantes:latest
+    container_name: plantes
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      DATA_DIR: /data
+    # The bind-mounted ./data must be writable by this uid:gid.
+    user: '${PLANTES_UID:-1000}:${PLANTES_GID:-1000}'
+    volumes:
+      - ./data:/data
+    read_only: true
+    tmpfs:
+      - /tmp
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    logging:
+      driver: json-file
+      options:
+        max-size: 10m
+        max-file: '3'
+    networks:
+      - frontend
+    labels:
+      - traefik.enable=true
+      - traefik.docker.network=frontend
+      - traefik.http.routers.plantes.rule=Host(`${PLANTES_HOST:-plantes.example.com}`)
+      - traefik.http.routers.plantes.entrypoints=websecure
+      - traefik.http.routers.plantes.tls=true
+      - traefik.http.services.plantes.loadbalancer.server.port=8787
+
+networks:
+  frontend:
+    external: true

@@ -1,0 +1,176 @@
+@import 'tailwindcss' source('..');
+
+/* Semantic colour tokens: utilities such as bg-surface or text-ink-2 follow
+   the light/dark values defined on :root below. */
+@theme inline {
+  --color-bg: var(--bg);
+  --color-surface: var(--surface);
+  --color-surface-2: var(--surface-2);
+  --color-line: var(--line);
+  --color-ink: var(--ink);
+  --color-ink-2: var(--ink-2);
+  --color-ink-3: var(--ink-3);
+  --color-brand: var(--brand);
+  --color-brand-ink: var(--brand-ink);
+  --color-brand-soft: var(--brand-soft);
+  --color-brand-strong: var(--brand-strong);
+  --color-water: var(--water);
+  --color-water-ink: var(--water-ink);
+  --color-water-soft: var(--water-soft);
+  --color-water-strong: var(--water-strong);
+  --color-warn: var(--warn);
+  --color-warn-soft: var(--warn-soft);
+  --color-warn-strong: var(--warn-strong);
+  --color-danger: var(--danger);
+  --color-danger-ink: var(--danger-ink);
+  --color-danger-soft: var(--danger-soft);
+  --color-danger-strong: var(--danger-strong);
+}
+
+@theme {
+  --font-sans:
+    ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, 'Noto Sans', sans-serif;
+  --font-display:
+    'Iowan Old Style', 'Palatino Linotype', Palatino, 'Book Antiqua', 'URW Palladio L', Georgia, 'Noto Serif', serif;
+
+  --animate-toast-in: toast-in 220ms cubic-bezier(0.2, 0.8, 0.2, 1);
+  --animate-pop: pop 420ms cubic-bezier(0.2, 0.8, 0.2, 1);
+  --animate-fade-in: fade-in 260ms ease-out;
+
+  @keyframes toast-in {
+    from {
+      opacity: 0;
+      transform: translateY(12px) scale(0.98);
+    }
+    to {
+      opacity: 1;
+      transform: none;
+    }
+  }
+  @keyframes pop {
+    0% {
+      opacity: 0;
+      transform: scale(0.6);
+    }
+    60% {
+      opacity: 1;
+      transform: scale(1.12);
+    }
+    100% {
+      transform: scale(1);
+    }
+  }
+  @keyframes fade-in {
+    from {
+      opacity: 0;
+      transform: translateY(4px);
+    }
+    to {
+      opacity: 1;
+      transform: none;
+    }
+  }
+}
+
+@layer base {
+  :root {
+    color-scheme: light;
+    --bg: #f6f3ea;
+    --surface: #fffdf7;
+    --surface-2: #efebdf;
+    --line: #e3ddcc;
+    --ink: #1d2a21;
+    --ink-2: #485a4d;
+    --ink-3: #636e65;
+    --brand: #2f6f47;
+    --brand-ink: #ffffff;
+    --brand-soft: #e1eedf;
+    --brand-strong: #24573a;
+    --water: #1f6f9e;
+    --water-ink: #ffffff;
+    --water-soft: #e0eef6;
+    --water-strong: #185a80;
+    --warn: #b7791f;
+    --warn-soft: #fbefd5;
+    --warn-strong: #8a5a12;
+    --danger: #b9472a;
+    --danger-ink: #ffffff;
+    --danger-soft: #f8e3dc;
+    --danger-strong: #92361f;
+  }
+
+  @media (prefers-color-scheme: dark) {
+    :root {
+      color-scheme: dark;
+      --bg: #0e1410;
+      --surface: #161e18;
+      --surface-2: #1f2a22;
+      --line: #2a362d;
+      --ink: #e7eee8;
+      --ink-2: #b4c0b7;
+      --ink-3: #8f9c92;
+      --brand: #5cb27c;
+      --brand-ink: #0b1a10;
+      --brand-soft: #1b3324;
+      --brand-strong: #8fd3a6;
+      --water: #4aa3d8;
+      --water-ink: #06131c;
+      --water-soft: #13293a;
+      --water-strong: #8cc8ec;
+      --warn: #e0a645;
+      --warn-soft: #33270f;
+      --warn-strong: #f2c97c;
+      --danger: #e0775a;
+      --danger-ink: #1a0b07;
+      --danger-soft: #3a1c14;
+      --danger-strong: #f3a58f;
+    }
+  }
+
+  html {
+    -webkit-text-size-adjust: 100%;
+    text-size-adjust: 100%;
+    background: var(--bg);
+  }
+
+  body {
+    min-height: 100dvh;
+    background: var(--bg);
+    color: var(--ink);
+    font-family: var(--font-sans);
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+    -webkit-tap-highlight-color: transparent;
+  }
+
+  :focus-visible {
+    outline: 2px solid var(--brand);
+    outline-offset: 2px;
+  }
+
+  ::selection {
+    background: var(--brand-soft);
+  }
+
+  dialog::backdrop {
+    background: rgb(8 14 10 / 0.5);
+    backdrop-filter: blur(2px);
+  }
+
+  dialog[open] {
+    animation: fade-in 200ms ease-out;
+  }
+
+  input[type='number']::-webkit-inner-spin-button {
+    opacity: 1;
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    *,
+    *::before,
+    *::after {
+      animation-duration: 1ms !important;
+      transition-duration: 1ms !important;
+    }
+  }
+}

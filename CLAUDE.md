@@ -27,7 +27,9 @@ Use Node 26 (`engines`). On Tony's machine `/usr/bin/node` is v22: prefix `PATH=
   params. `transaction()` callbacks must be synchronous.
 - `src/plants/` — `schema.ts` (zod, field names = column names, descriptions are what Claude reads), `store.ts`
   (SQL + mapping to `shared/api.ts` types), `schedule.ts` (watering due dates: local calendar days, two seasonal
-  intervals, snooze), `photos.ts` (sharp: auto-orient, strip metadata, WebP + thumbnail; upload capability links).
+  intervals, snooze), `photos.ts` (sharp: auto-orient, strip metadata, WebP + thumbnail; upload capability links). Each plant has
+  a photo journal (`plant_photos`; `plants.photo` = stem of the main photo) and structured `care_details` JSON
+  (`careDetailsSchema`: short phrases for the app's tiles/pills; the long texts are the details).
 - `src/mcp/` — `server.ts` builds a fresh `McpServer` per request (SDK v2, `createMcpHandler`, serves both 2025-era
   and 2026-07-28 clients); `http.ts` gates it with `requireBearerAuth` + our token verifier.
 - `src/oauth/` — authorization server: `clients.ts` (DCR and CIMD both restricted to loopback and the exact

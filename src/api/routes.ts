@@ -15,8 +15,13 @@ import {
   getPlantRow,
   listPlantRows,
   listRooms,
+  addPlantPhoto,
+  countPlantPhotos,
+  MAX_PHOTOS_PER_PLANT,
+  removePlantPhoto,
   setArchived,
-  setPlantPhoto,
+  setCoverPhoto,
+  setPhotoNote,
   snoozePlant,
   toDetail,
   toSummary,
@@ -225,31 +230,61 @@ export function apiRoutes(deps: Deps): Hono<AppEnv> {
   });
 
   app.delete('/plants/:id', async (c) => {
-    const { deleted, photo } = deletePlant(db, idParam(c));
+    const { deleted, photos } = deletePlant(db, idParam(c));
     if (!deleted) throw new ApiProblem(404, 'not_found', 'Plante introuvable.');
-    await deletePhoto(config.dataDir, photo);
+    for (const stem of photos) await deletePhoto(config.dataDir, stem);
     console.info(`plant ${c.req.param('id')} deleted by ${user(c).email}`);
     return c.body(null, 204);
   });
 
-  app.post(
-    '/plants/:id/photo',
-    bodyLimit({
-      maxSize: MAX_PHOTO_BYTES + 64 * 1024,
-      onError: (c) => c.json({ error: 'too_large', message: 'Photo trop lourde (20 Mo maximum).' }, 413),
-    }),
-    async (c) => {
-      const id = idParam(c);
-      activePlant(id);
-      const form = await c.req.parseBody();
-      const file = form.photo;
-      if (!(file instanceof File)) throw new ApiProblem(400, 'invalid_request', 'Champ « photo » manquant.');
-      const stem = await storePhoto(config.dataDir, new Uint8Array(await file.arrayBuffer()));
-      const previous = setPlantPhoto(db, id, stem);
-      await deletePhoto(config.dataDir, previous);
-      return c.json(detail(id));
-    },
-  );
+  // Photo journal. The legacy /photo route adds a photo and makes it the main one.
+  const photoBody = bodyLimit({
+    maxSize: MAX_PHOTO_BYTES + 64 * 1024,
+    onError: (c) => c.json({ error: 'too_large', message: 'Photo trop lourde (20 Mo maximum).' }, 413),
+  });
+  const addPhoto = async (c: Context<AppEnv>, forceCover: boolean) => {
+    const id = idParam(c);
+    activePlant(id);
+    if (countPlantPhotos(db, id) >= MAX_PHOTOS_PER_PLANT) {
+      throw new ApiProblem(
+        409,
+        'too_many_photos',
+        `Limite de ${MAX_PHOTOS_PER_PLANT} photos atteinte pour cette plante.`,
+      );
+    }
+    const form = await c.req.parseBody();
+    const file = form.photo;
+    if (!(file instanceof File)) throw new ApiProblem(400, 'invalid_request', 'Champ « photo » manquant.');
+    const note = typeof form.note === 'string' ? form.note : null;
+    const stem = await storePhoto(config.dataDir, new Uint8Array(await file.arrayBuffer()));
+    addPlantPhoto(db, id, stem, { userId: user(c).id, source: 'web', note, cover: forceCover || form.cover === '1' });
+    return c.json(detail(id));
+  };
+  app.post('/plants/:id/photos', photoBody, (c) => addPhoto(c, false));
+  app.post('/plants/:id/photo', photoBody, (c) => addPhoto(c, true));
+
+  app.patch('/plants/:id/photos/:photoId', async (c) => {
+    const id = idParam(c);
+    const photoId = idParam(c, 'photoId');
+    const patch = await parseJson(
+      c,
+      z.object({ note: z.string().trim().max(300).nullable().optional(), cover: z.literal(true).optional() }).strict(),
+    );
+    detail(id);
+    if (patch.cover && !setCoverPhoto(db, id, photoId)) throw new ApiProblem(404, 'not_found', 'Photo introuvable.');
+    if ('note' in patch && !setPhotoNote(db, id, photoId, patch.note ?? null)) {
+      throw new ApiProblem(404, 'not_found', 'Photo introuvable.');
+    }
+    return c.json(detail(id));
+  });
+
+  app.delete('/plants/:id/photos/:photoId', async (c) => {
+    const id = idParam(c);
+    const stem = removePlantPhoto(db, id, idParam(c, 'photoId'));
+    if (!stem) throw new ApiProblem(404, 'not_found', 'Photo introuvable.');
+    await deletePhoto(config.dataDir, stem);
+    return c.json(detail(id));
+  });
 
   app.put('/settings', async (c) => {
     const settings: UserSettings = await parseJson(c, settingsSchema);

@@ -86,3 +86,50 @@ export const householdFieldsShape = {
 } as const;
 
 export const PLANT_COLUMNS = Object.keys(plantFieldsShape) as (keyof PlantFields)[];
+
+// Structured care facts shown as tiles and pills in the app. Short phrases
+// (2–6 words, no final period) except key_tips. Stored as JSON in plants.care_details.
+const phrase = (max: number) => z.string().trim().min(1).max(max);
+const phrases = (max: number, count: number) => z.array(phrase(max)).max(count);
+
+export const careDetailsShape = {
+  light_good: phrases(50, 5)
+    .optional()
+    .describe('Good spots, 2–6 words each: "Fenêtre est ou ouest", "1–2 m d\'une fenêtre sud".'),
+  light_avoid: phrases(50, 5)
+    .optional()
+    .describe('Spots/conditions to avoid: "Soleil direct de midi", "Radiateur", "Courants d\'air".'),
+  watering_rule: phrase(80)
+    .optional()
+    .describe('When to water, one short line: "Quand les 2/3 du substrat sont secs".'),
+  watering_tips: phrases(50, 5)
+    .optional()
+    .describe('How to water: "Par le bas, 15 min", "Vider la soucoupe", "Eau reposée".'),
+  thirst_signs: phrase(90).optional().describe('What thirst looks like: "Feuilles molles et plissées".'),
+  overwatering_signs: phrase(90)
+    .optional()
+    .describe('What too much water looks like: "Feuilles jaunes, tige noire à la base".'),
+  humidity_tips: phrases(50, 4).optional().describe('"40–60 %", "Ne pas brumiser", "Billes d\'argile humides".'),
+  temp_ideal: phrase(30).optional().describe('Ideal range, e.g. "18–25 °C" (temp_min_c/temp_max_c stay the limits).'),
+  soil_mix: phrases(50, 5).optional().describe('Potting mix parts: "1/2 terreau plantes vertes", "1/4 perlite".'),
+  fertilizer_frequency: phrase(40).optional().describe('"Toutes les 3 semaines".'),
+  fertilizer_season: phrase(40).optional().describe('"Avril → septembre".'),
+  fertilizer_type: phrase(60).optional().describe('"Engrais plantes vertes, demi-dose".'),
+  repotting_frequency: phrase(40).optional().describe('"Tous les 2–3 ans".'),
+  repotting_season: phrase(50).optional().describe('"Printemps".'),
+  pruning_tips: phrases(70, 4)
+    .optional()
+    .describe('"Couper au-dessus d\'un nœud au printemps", "Bouture de tige dans l\'eau".'),
+  problems: z
+    .array(z.object({ symptom: phrase(70), cause: phrase(90) }))
+    .max(6)
+    .optional()
+    .describe(
+      'Most common issues as symptom → cause: {symptom: "Feuilles jaunes, sol humide", cause: "Excès d\'eau"}.',
+    ),
+  key_tips: phrases(140, 4).optional().describe('1–4 key tips, one short sentence each.'),
+  pet_risk: phrase(100).optional().describe('One line on the risk for cats/dogs: "Saponines : bave, vomissements".'),
+} as const;
+
+export const careDetailsSchema = z.object(careDetailsShape);
+export type CareDetailsInput = z.infer<typeof careDetailsSchema>;

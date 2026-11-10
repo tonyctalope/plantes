@@ -181,4 +181,25 @@ export const MIGRATIONS: readonly string[] = [
     value TEXT NOT NULL
   );
   `,
+
+  /* 2 — photo journal + structured care details */ `
+  ALTER TABLE plants ADD COLUMN care_details TEXT;          -- JSON (see careDetailsSchema)
+
+  CREATE TABLE plant_photos (
+    id INTEGER PRIMARY KEY,
+    plant_id INTEGER NOT NULL REFERENCES plants(id) ON DELETE CASCADE,
+    stem TEXT NOT NULL UNIQUE,
+    taken_at TEXT NOT NULL,
+    user_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
+    source TEXT NOT NULL,                                   -- 'web' | 'link'
+    note TEXT
+  );
+  CREATE INDEX plant_photos_plant ON plant_photos(plant_id, taken_at);
+
+  -- Existing main photos become the first journal entry.
+  INSERT INTO plant_photos (plant_id, stem, taken_at, user_id, source)
+    SELECT id, photo, updated_at, created_by, 'link' FROM plants WHERE photo IS NOT NULL;
+
+  ALTER TABLE photo_upload_tokens ADD COLUMN set_cover INTEGER NOT NULL DEFAULT 0;
+  `,
 ];

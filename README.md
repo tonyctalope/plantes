@@ -8,6 +8,10 @@ Les plantes de la maison, partagées par tout le foyer :
 - **Rappels d'arrosage** en notification push (PWA Android/iOS/desktop), une fois par jour à l'heure choisie par
   chacun, avec un rythme différent en saison de croissance (avril–septembre) et au repos.
 - **Partagé** : n'importe quel membre coche « Arrosé », et les rappels s'arrêtent pour tout le monde.
+- **Journal photo** : autant de photos datées que tu veux par plante (avec une note), pour suivre sa croissance ;
+  Claude peut comparer les dernières photos pour un diagnostic.
+- **Fiche lisible** : l'essentiel en tuiles et en pastilles (où la mettre, quand arroser, signes d'alerte,
+  problèmes fréquents), les longues explications de Claude repliées dans « Détails ».
 - **Connexion Google** réservée à une **allowlist d'adresses e-mail**.
 
 ## Comment ça marche
@@ -49,7 +53,7 @@ Les photos sont réorientées, réduites (1600 px + vignette 480 px) et **toutes
 | `log_care`                 | Arrosage (ou engrais, rempotage…) d'une ou plusieurs plantes, maintenant ou à une date passée |
 | `get_due_plants`           | « Qu'est-ce que je dois arroser ? »                                                           |
 | `snooze_watering`          | Reporter (terre encore humide)                                                                |
-| `create_photo_upload_link` | Ajouter/remplacer une photo                                                                   |
+| `create_photo_upload_link` | Ajouter une photo au journal (ou la principale)                                               |
 | `archive_plant`            | Plante morte ou donnée (restaurable dans l'appli)                                             |
 
 ## Connecter Claude

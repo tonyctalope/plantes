@@ -64,6 +64,57 @@ export interface PlantSummary {
   archivedAt: string | null;
   /** Why it was archived ("morte", "donnée"…), when given. */
   archiveReason: string | null;
+  /** Photos in the plant's journal (the cover included). */
+  photoCount: number;
+}
+
+/**
+ * Short, structured facts Claude fills next to the long texts: they drive the
+ * pills/tiles of the care sheet. Every string is a short phrase, not a sentence.
+ * Empty arrays / nulls when unknown. Absent (CareSheet.details = null) on plants
+ * added before this format existed: the UI then falls back to the long texts.
+ */
+export interface CareDetails {
+  /** Good spots, e.g. "Fenêtre est ou ouest", "1–2 m d'une fenêtre sud". */
+  lightGood: string[];
+  /** To avoid, e.g. "Soleil direct de midi", "Radiateur". */
+  lightAvoid: string[];
+  /** When to water, e.g. "Quand les 2/3 du substrat sont secs". */
+  wateringRule: string | null;
+  /** How, e.g. "Par le bas, 15 min", "Vider la soucoupe". */
+  wateringTips: string[];
+  thirstSigns: string | null;
+  overwateringSigns: string | null;
+  humidityTips: string[];
+  /** Ideal range as text, e.g. "18–25 °C" (tempMinC/tempMaxC are the limits). */
+  tempIdeal: string | null;
+  /** Potting mix parts, e.g. "1/2 terreau plantes vertes", "1/4 perlite". */
+  soilMix: string[];
+  fertilizerFrequency: string | null;
+  fertilizerSeason: string | null;
+  fertilizerType: string | null;
+  repottingFrequency: string | null;
+  repottingSeason: string | null;
+  pruningTips: string[];
+  problems: { symptom: string; cause: string }[];
+  /** 1–4 key tips (short sentences). */
+  keyTips: string[];
+  /** One line on the risk for pets, e.g. "Saponines : bave, vomissements". */
+  petRisk: string | null;
+}
+
+export interface PlantPhoto {
+  id: number;
+  /** 480×480 crop. */
+  thumb: string;
+  /** Up to 1600 px. */
+  full: string;
+  /** ISO timestamp (upload time). */
+  takenAt: string;
+  by: string | null;
+  note: string | null;
+  isCover: boolean;
+  source: 'web' | 'link';
 }
 
 /** The care sheet Claude fills in when the plant is added (all free text is French). */
@@ -92,6 +143,7 @@ export interface CareSheet {
   commonProblems: string | null;
   tips: string | null;
   pot: string | null;
+  details: CareDetails | null;
 }
 
 export interface CareEvent {
@@ -116,6 +168,14 @@ export interface PlantDetail extends PlantSummary {
   lastFertilizedAt: string | null;
   /** Most recent first, at most 50. */
   events: CareEvent[];
+  /** Photo journal, most recent first. */
+  photos: PlantPhoto[];
+}
+
+export interface PhotoPatch {
+  note?: string | null;
+  /** Make this photo the plant's main photo. */
+  cover?: true;
 }
 
 export interface UserSettings {
@@ -214,7 +274,11 @@ export interface ApiError {
  *   POST   /api/plants/:id/archive ArchiveRequest → PlantDetail
  *   POST   /api/plants/:id/unarchive        → PlantDetail
  *   DELETE /api/plants/:id                  → 204
- *   POST   /api/plants/:id/photo  multipart field "photo" → PlantDetail
+ *   POST   /api/plants/:id/photos multipart "photo" (+ optional "note", "cover"=1) → PlantDetail
+ *          (adds to the journal; becomes the main photo if the plant had none or cover=1)
+ *   PATCH  /api/plants/:id/photos/:photoId PhotoPatch → PlantDetail
+ *   DELETE /api/plants/:id/photos/:photoId  → PlantDetail (the newest remaining photo becomes main)
+ *   POST   /api/plants/:id/photo  multipart "photo" → PlantDetail (legacy: add + make main)
  *   PUT    /api/settings          UserSettings → UserSettings
  *   POST   /api/push/subscriptions PushSubscriptionRequest → 204
  *   DELETE /api/push/subscriptions {endpoint} → 204

@@ -5,7 +5,13 @@ import { get } from '../db/database.ts';
 import { addDays, isIsoDate, localDate, localTime } from '../lib/time.ts';
 import { createUploadLink, readThumbnail, UPLOAD_LINK_TTL_MS, UploadLinkLimitError } from '../plants/photos.ts';
 import { seasonOf } from '../plants/schedule.ts';
-import { CARE_TYPE, householdFieldsShape, plantFieldsSchema, plantFieldsShape } from '../plants/schema.ts';
+import {
+  CARE_TYPE,
+  careDetailsSchema,
+  householdFieldsShape,
+  plantFieldsSchema,
+  plantFieldsShape,
+} from '../plants/schema.ts';
 import {
   addCareEvent,
   createPlant,
@@ -22,7 +28,10 @@ import {
 } from '../plants/store.ts';
 import type { Deps } from '../types.ts';
 
-const VERSION = '1.0.0';
+const VERSION = '1.1.0';
+
+const DETAILS_DESCRIPTION =
+  'Structured, SHORT facts shown as tiles and pills in the app (2–6 words per item, no sentences except key_tips). Fill as many as you can: this is what the household reads first; the long text fields are only the "details" behind it.';
 const MAX_ACTIVE_PLANTS = 300;
 const MAX_PLANTS = 1000;
 /** Care events a single plant may receive per 24 h (a household waters a plant a few times a day at most). */
@@ -53,8 +62,10 @@ function instructions(deps: Deps, today: string): string {
     '2. Call list_plants first to avoid duplicates and to reuse the existing room names.',
     "3. If you don't know where the plant lives (room, window orientation, distance to the window), ask briefly: light and watering advice depend on it. If the user doesn't know, assume and say so.",
     '4. Call add_plant with a complete care sheet adapted to indoor life in this home. Watering intervals are reminder cadences: pick realistic values for this plant in its current pot, separately for the growing season and the rest period, and tell the user they can adjust them in the app.',
+    '4b. Always fill `details` (short pills: light_good / light_avoid, watering_rule, watering_tips, thirst_signs / overwatering_signs, soil_mix, fertilizer_*, repotting_*, problems as symptom → cause, key_tips, pet_risk). Keep the long text fields to 1–3 sentences: they are only shown on demand.',
     '5. Attach the photo: add_plant returns photo_upload_url. If you can read the image file yourself (Claude Code: the local file path; a code sandbox where the upload lives, e.g. /mnt/user-data/uploads/…), upload it with: curl -fsS -F "photo=@<file>" "<photo_upload_url>". Otherwise give the user the link: it opens a page where they pick the photo (valid 24 h).',
     '',
+    'Photos: each plant has a photo journal for following its growth. To add another photo later, call create_photo_upload_link (the photo is added to the journal; set_as_cover makes it the main photo). get_plant with recent_photos shows you the latest photos with their dates to compare and diagnose.',
     'Watering: when someone says they watered, call log_care (type "water", several plant ids at once is fine). "Qu\'est-ce que je dois arroser ?" → get_due_plants. If the soil is still moist, snooze_watering instead of logging a watering.',
     'Never invent a watering that did not happen; ask when unsure which plants were watered.',
     config.householdContext ? `\nHousehold context: ${config.householdContext}` : '',
@@ -121,10 +132,10 @@ export function buildMcpServer(deps: Deps, caller: McpCaller): McpServer {
     const row = getPlantRow(db, id);
     return row && !row.archived_at ? row : null;
   };
-  const uploadInstructions = (plantId: number) => {
+  const uploadInstructions = (plantId: number, setCover: boolean) => {
     let link;
     try {
-      link = createUploadLink(db, plantId, caller.userId);
+      link = createUploadLink(db, plantId, caller.userId, { setCover });
     } catch (error) {
       if (!(error instanceof UploadLinkLimitError)) throw error;
       return { text: 'No photo link available right now (too many live links); try create_photo_upload_link later.' };
@@ -166,14 +177,15 @@ export function buildMcpServer(deps: Deps, caller: McpCaller): McpServer {
     {
       title: 'Fiche d’une plante',
       description:
-        'Full care sheet, household notes and the recent care history of one plant. include_photo returns its photo so you can look at it (e.g. to diagnose a problem).',
+        'Full care sheet, household notes, recent care history and photo journal of one plant. include_photo returns its main photo; recent_photos returns the latest journal photos (newest first, with dates) so you can follow its growth or diagnose a problem.',
       inputSchema: z.object({
         plant_id: z.number().int().positive(),
-        include_photo: z.boolean().optional(),
+        include_photo: z.boolean().optional().describe('Return the main photo.'),
+        recent_photos: z.number().int().min(0).max(4).optional().describe('Also return the N latest journal photos.'),
       }),
       annotations: { readOnlyHint: true },
     },
-    async ({ plant_id, include_photo }) => {
+    async ({ plant_id, include_photo, recent_photos = 0 }) => {
       const row = getPlantRow(db, plant_id);
       if (!row) return text(`No plant with id ${plant_id}. Call list_plants.`, true);
       const detail = toDetail(db, row, view());
@@ -185,12 +197,32 @@ export function buildMcpServer(deps: Deps, caller: McpCaller): McpServer {
         created_by: detail.createdBy,
         last_fertilized_at: detail.lastFertilizedAt,
         recent_events: listEvents(db, plant_id, 15),
+        photo_journal: detail.photos.map((photo) => ({
+          id: photo.id,
+          taken_at: photo.takenAt,
+          by: photo.by,
+          note: photo.note,
+          is_main: photo.isCover,
+        })),
       });
       if (include_photo && row.photo) {
         const data = await readThumbnail(config.dataDir, row.photo);
-        if (data) result.content.push({ type: 'image', data, mimeType: 'image/webp' });
+        if (data) {
+          result.content.push({ type: 'text', text: 'Main photo:' });
+          result.content.push({ type: 'image', data, mimeType: 'image/webp' });
+        }
       } else if (include_photo) {
         result.content.push({ type: 'text', text: 'This plant has no photo yet (create_photo_upload_link).' });
+      }
+      for (const photo of detail.photos.slice(0, recent_photos)) {
+        const stem = /\/photos\/([A-Za-z0-9_-]{22})-thumb\.webp$/.exec(photo.thumb)?.[1];
+        const data = stem ? await readThumbnail(config.dataDir, stem) : null;
+        if (!data) continue;
+        result.content.push({
+          type: 'text',
+          text: `Journal photo #${photo.id}, ${photo.takenAt}${photo.note ? ` — ${photo.note}` : ''}:`,
+        });
+        result.content.push({ type: 'image', data, mimeType: 'image/webp' });
       }
       return result;
     },
@@ -204,6 +236,7 @@ export function buildMcpServer(deps: Deps, caller: McpCaller): McpServer {
         'Add a plant with a complete care sheet, after identifying it (usually from a photo the user sent). Returns its id, page URL and a photo upload link: attach the photo right after (see the server instructions).',
       inputSchema: plantFieldsSchema.extend({
         notes: z.string().trim().max(2000).optional().describe('Household notes (origin, gift from…, quirks).'),
+        details: careDetailsSchema.optional().describe(DETAILS_DESCRIPTION),
         last_watered: z
           .string()
           .optional()
@@ -212,7 +245,7 @@ export function buildMcpServer(deps: Deps, caller: McpCaller): McpServer {
       annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false },
     },
     async (input) => {
-      const { notes, last_watered, ...fields } = input;
+      const { notes, last_watered, details, ...fields } = input;
       const counts = get<{ active: number; total: number }>(
         db,
         'SELECT COUNT(*) FILTER (WHERE archived_at IS NULL) AS active, COUNT(*) AS total FROM plants',
@@ -242,7 +275,7 @@ export function buildMcpServer(deps: Deps, caller: McpCaller): McpServer {
         return text('last_watered must be a past date (YYYY-MM-DD) or ISO timestamp.', true);
       const id = createPlant(
         db,
-        { ...fields, notes: notes ?? null },
+        { ...fields, notes: notes ?? null, ...(details ? { details } : {}) },
         {
           userId: caller.userId,
           via: caller.clientName,
@@ -250,7 +283,7 @@ export function buildMcpServer(deps: Deps, caller: McpCaller): McpServer {
         },
       );
       const plant = toSummary(getPlantRow(db, id)!, view());
-      const upload = uploadInstructions(id);
+      const upload = uploadInstructions(id, true);
       console.info(`mcp: ${caller.email} added plant ${id} (${fields.scientific_name}) via ${caller.clientName}`);
       return text(
         [
@@ -275,10 +308,13 @@ export function buildMcpServer(deps: Deps, caller: McpCaller): McpServer {
         plant_id: z.number().int().positive(),
         ...Object.fromEntries(Object.entries(plantFieldsShape).map(([key, schema]) => [key, schema.optional()])),
         ...householdFieldsShape,
+        details: careDetailsSchema
+          .optional()
+          .describe(`${DETAILS_DESCRIPTION} Merged: the keys you pass replace the stored ones, the others stay.`),
       }) as unknown as z.ZodObject<
         { plant_id: z.ZodNumber } & {
           [K in keyof typeof plantFieldsShape]: z.ZodOptional<(typeof plantFieldsShape)[K]>;
-        } & typeof householdFieldsShape
+        } & typeof householdFieldsShape & { details: z.ZodOptional<typeof careDetailsSchema> }
       >,
       annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true },
     },
@@ -381,14 +417,21 @@ export function buildMcpServer(deps: Deps, caller: McpCaller): McpServer {
     'create_photo_upload_link',
     {
       title: 'Lien d’envoi de photo',
-      description: 'New link to attach or replace the photo of an existing plant (valid 24 h).',
-      inputSchema: z.object({ plant_id: z.number().int().positive() }),
+      description:
+        "New link to add a photo to a plant's photo journal (valid 24 h). The photo becomes the main photo if set_as_cover is true or the plant has none.",
+      inputSchema: z.object({
+        plant_id: z.number().int().positive(),
+        set_as_cover: z
+          .boolean()
+          .optional()
+          .describe('Make the uploaded photo the main photo (default: only if it has none).'),
+      }),
       annotations: { readOnlyHint: false, destructiveHint: false },
     },
-    async ({ plant_id }) => {
+    async ({ plant_id, set_as_cover }) => {
       const row = findActive(plant_id);
       if (!row) return text(`No active plant with id ${plant_id}.`, true);
-      const upload = uploadInstructions(plant_id);
+      const upload = uploadInstructions(plant_id, set_as_cover ?? false);
       return text(
         `Photo link for #${plant_id} "${row.nickname}" (valid ${UPLOAD_LINK_TTL_MS / 3600_000} h):\n${upload.text}`,
       );

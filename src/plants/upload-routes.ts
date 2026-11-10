@@ -4,8 +4,8 @@ import { messagePage } from '../pages/layout.ts';
 import { uploadPage } from '../pages/upload.ts';
 import { clientIp, RateLimiter } from '../lib/http.ts';
 import { allowlist, type AppEnv, type Deps } from '../types.ts';
-import { countUpload, deletePhoto, MAX_PHOTO_BYTES, PhotoError, resolveUploadLink, storePhoto } from './photos.ts';
-import { getPlantRow, setPlantPhoto } from './store.ts';
+import { countUpload, MAX_PHOTO_BYTES, PhotoError, resolveUploadLink, storePhoto } from './photos.ts';
+import { addPlantPhoto, countPlantPhotos, getPlantRow, MAX_PHOTOS_PER_PLANT } from './store.ts';
 
 // /p/<token>: capability link created by Claude (add_plant / create_photo_upload_link).
 // Browsers get a small form; curl (`-F photo=@file`) or a raw image body get JSON.
@@ -77,9 +77,11 @@ export function uploadRoutes(deps: Deps): Hono<AppEnv> {
       if (!link || !plant || plant.archived_at) return invalid(c);
 
       let bytes: Uint8Array | null = null;
+      let note: string | null = null;
       const type = c.req.header('content-type') ?? '';
       if (type.startsWith('multipart/form-data')) {
         const form = await c.req.parseBody();
+        if (typeof form.note === 'string') note = form.note;
         const file = form.photo ?? form.file;
         if (file instanceof File) bytes = new Uint8Array(await file.arrayBuffer());
       } else if (type.startsWith('image/') || type === 'application/octet-stream') {
@@ -88,9 +90,11 @@ export function uploadRoutes(deps: Deps): Hono<AppEnv> {
       const view = { nickname: plant.nickname, commonName: plant.common_name, action: `/p/${token}` };
       try {
         if (!bytes) throw new PhotoError('Aucune image reçue (champ « photo »).');
+        if (countPlantPhotos(db, plant.id) >= MAX_PHOTOS_PER_PLANT) {
+          throw new PhotoError(`Limite de ${MAX_PHOTOS_PER_PLANT} photos atteinte pour cette plante.`);
+        }
         const stem = await storePhoto(config.dataDir, bytes);
-        const previous = setPlantPhoto(db, plant.id, stem);
-        await deletePhoto(config.dataDir, previous);
+        addPlantPhoto(db, plant.id, stem, { userId: link.createdBy, source: 'link', note, cover: link.setCover });
         countUpload(db, link.hash);
         console.info(`photo uploaded for plant ${plant.id}`);
         return wantsHtml(c)

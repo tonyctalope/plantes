@@ -115,7 +115,12 @@ const MAX_LIVE_LINKS = 300;
 
 export class UploadLinkLimitError extends Error {}
 
-export function createUploadLink(db: Db, plantId: number, userId: number | null): { token: string; expiresAt: string } {
+export function createUploadLink(
+  db: Db,
+  plantId: number,
+  userId: number | null,
+  options: { setCover?: boolean } = {},
+): { token: string; expiresAt: string } {
   const token = randomToken();
   const now = Date.now();
   const nowIso = new Date(now).toISOString();
@@ -133,9 +138,16 @@ export function createUploadLink(db: Db, plantId: number, userId: number | null)
   const expiresAt = new Date(now + UPLOAD_LINK_TTL_MS).toISOString();
   run(
     db,
-    `INSERT INTO photo_upload_tokens (token_hash, plant_id, created_by, created_at, expires_at)
-     VALUES (:hash, :plant, :user, :now, :expires)`,
-    { hash: sha256(token), plant: plantId, user: userId, now: new Date(now).toISOString(), expires: expiresAt },
+    `INSERT INTO photo_upload_tokens (token_hash, plant_id, created_by, created_at, expires_at, set_cover)
+     VALUES (:hash, :plant, :user, :now, :expires, :cover)`,
+    {
+      hash: sha256(token),
+      plant: plantId,
+      user: userId,
+      now: new Date(now).toISOString(),
+      expires: expiresAt,
+      cover: options.setCover ? 1 : 0,
+    },
   );
   return { token, expiresAt };
 }
@@ -145,6 +157,7 @@ export interface UploadLink {
   createdBy: number | null;
   uploads: number;
   hash: string;
+  setCover: boolean;
 }
 
 export function resolveUploadLink(db: Db, token: string, isAllowed: (email: string) => boolean): UploadLink | null {
@@ -156,16 +169,23 @@ export function resolveUploadLink(db: Db, token: string, isAllowed: (email: stri
     uploads: number;
     expires_at: string;
     email: string | null;
+    set_cover: number;
   }>(
     db,
-    `SELECT t.plant_id, t.created_by, t.uploads, t.expires_at, u.email
+    `SELECT t.plant_id, t.created_by, t.uploads, t.expires_at, t.set_cover, u.email
        FROM photo_upload_tokens t LEFT JOIN users u ON u.id = t.created_by WHERE t.token_hash = :hash`,
     { hash },
   );
   if (!row || Date.parse(row.expires_at) <= Date.now() || row.uploads >= MAX_UPLOADS_PER_LINK) return null;
   // A link dies with its creator's access.
   if (!row.email || !isAllowed(row.email)) return null;
-  return { plantId: row.plant_id, createdBy: row.created_by, uploads: row.uploads, hash };
+  return {
+    plantId: row.plant_id,
+    createdBy: row.created_by,
+    uploads: row.uploads,
+    hash,
+    setCover: row.set_cover === 1,
+  };
 }
 
 export function countUpload(db: Db, hash: string): void {

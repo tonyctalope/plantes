@@ -165,15 +165,20 @@ describe('web API', () => {
       404,
     );
 
-    // Replacing the photo removes the old files.
+    // A second photo goes to the journal (two files per photo) and, on the legacy route, becomes the main one.
     const again = new FormData();
     again.append('photo', new Blob([new Uint8Array(await sampleJpeg())], { type: 'image/jpeg' }), 'p.jpg');
-    await api(`/plants/${plantId}/photo`, {
-      method: 'POST',
-      headers: { cookie: tony.cookie, origin: ctx.deps.config.origin },
-      body: again,
-    });
-    expect(readdirSync(path.join(ctx.deps.config.dataDir, 'photos'))).toHaveLength(2);
+    const second = (await (
+      await api(`/plants/${plantId}/photo`, {
+        method: 'POST',
+        headers: { cookie: tony.cookie, origin: ctx.deps.config.origin },
+        body: again,
+      })
+    ).json()) as PlantDetail;
+    expect(readdirSync(path.join(ctx.deps.config.dataDir, 'photos'))).toHaveLength(4);
+    expect(second.photos).toHaveLength(2);
+    expect(second.photos[0]!.isCover).toBe(true);
+    expect(second.photo!.full).toBe(second.photos[0]!.full);
 
     const notImage = new FormData();
     notImage.append('photo', new Blob(['hello'], { type: 'image/jpeg' }), 'x.jpg');

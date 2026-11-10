@@ -1,4 +1,5 @@
 import type {
+  CareDetails,
   CareEvent,
   CareSheet,
   CareSource,
@@ -8,13 +9,20 @@ import type {
   Humidity,
   Light,
   PlantDetail,
+  PlantPhoto,
   PlantSummary,
   Toxicity,
 } from '../../shared/api.ts';
 import { all, bool, get, run, transaction, type Db, type Params } from '../db/database.ts';
 import { displayName } from '../auth/users.ts';
 import { computeWaterStatus, type GrowingMonths } from './schedule.ts';
-import { PLANT_COLUMNS, type PlantFields, type PlantFieldsPatch } from './schema.ts';
+import {
+  careDetailsSchema,
+  PLANT_COLUMNS,
+  type CareDetailsInput,
+  type PlantFields,
+  type PlantFieldsPatch,
+} from './schema.ts';
 
 export interface PlantRow {
   id: number;
@@ -64,6 +72,8 @@ export interface PlantRow {
   last_fertilize_at: string | null;
   creator_name: string | null;
   creator_email: string | null;
+  care_details: string | null;
+  photo_count: number;
 }
 
 interface EventRow {
@@ -88,7 +98,8 @@ const SELECT_PLANT = `
   SELECT p.*,
     lw.at AS last_water_at, lu.name AS last_water_by_name, lu.email AS last_water_by_email,
     (SELECT MAX(f.at) FROM care_events f WHERE f.plant_id = p.id AND f.type = 'fertilize') AS last_fertilize_at,
-    cu.name AS creator_name, cu.email AS creator_email
+    cu.name AS creator_name, cu.email AS creator_email,
+    (SELECT COUNT(*) FROM plant_photos pp WHERE pp.plant_id = p.id) AS photo_count
   FROM plants p
   LEFT JOIN care_events lw ON lw.id = (
     SELECT e.id FROM care_events e WHERE e.plant_id = p.id AND e.type = 'water' ORDER BY e.at DESC, e.id DESC LIMIT 1)
@@ -113,20 +124,29 @@ function fieldParams(fields: PlantFieldsPatch): Params {
 
 export function createPlant(
   db: Db,
-  fields: PlantFields & { notes?: string | null },
+  fields: PlantFields & { notes?: string | null; details?: CareDetailsInput },
   meta: { userId: number | null; via: string; lastWateredAt?: string | null },
 ): number {
   return transaction(db, () => {
     const now = new Date().toISOString();
     const params = fieldParams(fields);
     for (const column of PLANT_COLUMNS) if (!(column in params)) params[column] = null;
-    const columns = [...PLANT_COLUMNS, 'notes', 'created_at', 'updated_at', 'created_by', 'created_via'];
+    const columns = [
+      ...PLANT_COLUMNS,
+      'notes',
+      'care_details',
+      'created_at',
+      'updated_at',
+      'created_by',
+      'created_via',
+    ];
     const { lastInsertRowid } = run(
       db,
       `INSERT INTO plants (${columns.join(', ')}) VALUES (${columns.map((c) => `:${c}`).join(', ')})`,
       {
         ...params,
         notes: fields.notes ?? null,
+        care_details: fields.details ? JSON.stringify(fields.details) : null,
         created_at: now,
         updated_at: now,
         created_by: meta.userId,
@@ -163,7 +183,7 @@ export function listPlantRows(db: Db, filter: { archived: boolean | 'all' } = { 
 export function updatePlant(
   db: Db,
   id: number,
-  patch: PlantFieldsPatch & { notes?: string | null; reminders_enabled?: boolean },
+  patch: PlantFieldsPatch & { notes?: string | null; reminders_enabled?: boolean; details?: CareDetailsInput },
 ): boolean {
   const params = fieldParams(patch);
   const sets = Object.keys(params).map((column) => `${column} = :${column}`);
@@ -174,6 +194,13 @@ export function updatePlant(
   if (patch.reminders_enabled !== undefined) {
     sets.push('reminders_enabled = :reminders_enabled');
     params.reminders_enabled = bool(patch.reminders_enabled);
+  }
+  if (patch.details) {
+    // Merge: the keys passed replace the stored ones, the others stay.
+    const current = get<{ care_details: string | null }>(db, 'SELECT care_details FROM plants WHERE id = :id', { id });
+    const merged = { ...readDetails(current?.care_details ?? null), ...patch.details };
+    sets.push('care_details = :care_details');
+    params.care_details = JSON.stringify(merged);
   }
   if (sets.length === 0) return Boolean(getPlantRow(db, id));
   const { changes } = run(db, `UPDATE plants SET ${sets.join(', ')}, updated_at = :updated_at WHERE id = :id`, {
@@ -250,27 +277,130 @@ export function setArchived(db: Db, id: number, archived: boolean, reason: strin
   );
 }
 
-/** Deletes the plant and returns its photo stem (to delete the files). */
-export function deletePlant(db: Db, id: number): { deleted: boolean; photo: string | null } {
+/** Deletes the plant and returns the stems of all its photos (to delete the files). */
+export function deletePlant(db: Db, id: number): { deleted: boolean; photos: string[] } {
   return transaction(db, () => {
     const row = get<{ photo: string | null }>(db, 'SELECT photo FROM plants WHERE id = :id', { id });
-    if (!row) return { deleted: false, photo: null };
+    if (!row) return { deleted: false, photos: [] };
+    const stems = all<{ stem: string }>(db, 'SELECT stem FROM plant_photos WHERE plant_id = :id', { id }).map(
+      (photo) => photo.stem,
+    );
+    if (row.photo && !stems.includes(row.photo)) stems.push(row.photo);
     run(db, 'DELETE FROM plants WHERE id = :id', { id });
-    return { deleted: true, photo: row.photo };
+    return { deleted: true, photos: stems };
   });
 }
 
-/** Sets the photo and returns the previous stem. */
-export function setPlantPhoto(db: Db, id: number, stem: string): string | null {
+// --- photo journal (plants.photo = stem of the main photo)
+
+export const MAX_PHOTOS_PER_PLANT = 200;
+
+export function countPlantPhotos(db: Db, plantId: number): number {
+  return get<{ n: number }>(db, 'SELECT COUNT(*) AS n FROM plant_photos WHERE plant_id = :id', { id: plantId })?.n ?? 0;
+}
+
+/** Adds a photo to the journal; it becomes the main photo when asked or when the plant has none. */
+export function addPlantPhoto(
+  db: Db,
+  plantId: number,
+  stem: string,
+  meta: { userId: number | null; source: 'web' | 'link'; note?: string | null; cover?: boolean },
+): number {
   return transaction(db, () => {
-    const row = get<{ photo: string | null }>(db, 'SELECT photo FROM plants WHERE id = :id', { id });
-    if (!row) throw new Error(`Plant ${id} not found`);
-    run(db, 'UPDATE plants SET photo = :photo, updated_at = :now WHERE id = :id', {
-      photo: stem,
-      now: new Date().toISOString(),
-      id,
+    const now = new Date().toISOString();
+    const { lastInsertRowid } = run(
+      db,
+      `INSERT INTO plant_photos (plant_id, stem, taken_at, user_id, source, note) VALUES (:plant, :stem, :at, :user, :source, :note)`,
+      {
+        plant: plantId,
+        stem,
+        at: now,
+        user: meta.userId,
+        source: meta.source,
+        note: meta.note?.trim() ? meta.note.trim().slice(0, 300) : null,
+      },
+    );
+    run(
+      db,
+      `UPDATE plants SET photo = CASE WHEN :cover = 1 OR photo IS NULL THEN :stem ELSE photo END, updated_at = :now
+        WHERE id = :plant`,
+      { cover: meta.cover ? 1 : 0, stem, now, plant: plantId },
+    );
+    return lastInsertRowid;
+  });
+}
+
+interface PhotoRow {
+  id: number;
+  stem: string;
+  taken_at: string;
+  source: 'web' | 'link';
+  note: string | null;
+  user_name: string | null;
+  user_email: string | null;
+}
+
+export function listPlantPhotos(db: Db, plantId: number, cover: string | null): PlantPhoto[] {
+  return all<PhotoRow>(
+    db,
+    `SELECT ph.id, ph.stem, ph.taken_at, ph.source, ph.note, u.name AS user_name, u.email AS user_email
+       FROM plant_photos ph LEFT JOIN users u ON u.id = ph.user_id
+      WHERE ph.plant_id = :plant ORDER BY ph.taken_at DESC, ph.id DESC`,
+    { plant: plantId },
+  ).map((row) => ({
+    id: row.id,
+    ...photoUrls(row.stem)!,
+    takenAt: row.taken_at,
+    by: nameOf(row.user_name, row.user_email),
+    note: row.note,
+    isCover: row.stem === cover,
+    source: row.source,
+  }));
+}
+
+export function setCoverPhoto(db: Db, plantId: number, photoId: number): boolean {
+  const row = get<{ stem: string }>(db, 'SELECT stem FROM plant_photos WHERE id = :id AND plant_id = :plant', {
+    id: photoId,
+    plant: plantId,
+  });
+  if (!row) return false;
+  run(db, 'UPDATE plants SET photo = :stem, updated_at = :now WHERE id = :plant', {
+    stem: row.stem,
+    now: new Date().toISOString(),
+    plant: plantId,
+  });
+  return true;
+}
+
+export function setPhotoNote(db: Db, plantId: number, photoId: number, note: string | null): boolean {
+  return (
+    run(db, 'UPDATE plant_photos SET note = :note WHERE id = :id AND plant_id = :plant', {
+      note: note?.trim() ? note.trim().slice(0, 300) : null,
+      id: photoId,
+      plant: plantId,
+    }).changes === 1
+  );
+}
+
+/** Removes a journal photo; returns its stem (files to delete). The newest remaining photo becomes main. */
+export function removePlantPhoto(db: Db, plantId: number, photoId: number): string | null {
+  return transaction(db, () => {
+    const row = get<{ stem: string }>(db, 'SELECT stem FROM plant_photos WHERE id = :id AND plant_id = :plant', {
+      id: photoId,
+      plant: plantId,
     });
-    return row.photo;
+    if (!row) return null;
+    run(db, 'DELETE FROM plant_photos WHERE id = :id', { id: photoId });
+    const plant = get<{ photo: string | null }>(db, 'SELECT photo FROM plants WHERE id = :id', { id: plantId });
+    if (plant?.photo === row.stem) {
+      const next = get<{ stem: string }>(
+        db,
+        'SELECT stem FROM plant_photos WHERE plant_id = :plant ORDER BY taken_at DESC, id DESC LIMIT 1',
+        { plant: plantId },
+      );
+      run(db, 'UPDATE plants SET photo = :stem WHERE id = :plant', { stem: next?.stem ?? null, plant: plantId });
+    }
+    return row.stem;
   });
 }
 
@@ -297,6 +427,7 @@ export function toSummary(row: PlantRow, view: ViewContext): PlantSummary {
     toxicityPets: row.toxicity_pets,
     archivedAt: row.archived_at,
     archiveReason: row.archive_reason,
+    photoCount: row.photo_count,
     water: computeWaterStatus(
       {
         createdAt: row.created_at,
@@ -339,6 +470,42 @@ export function careSheet(row: PlantRow): CareSheet {
     commonProblems: row.common_problems,
     tips: row.tips,
     pot: row.pot,
+    details: toCareDetails(row.care_details),
+  };
+}
+
+function readDetails(json: string | null): CareDetailsInput {
+  if (!json) return {};
+  try {
+    const parsed = careDetailsSchema.safeParse(JSON.parse(json));
+    return parsed.success ? parsed.data : {};
+  } catch {
+    return {};
+  }
+}
+
+function toCareDetails(json: string | null): CareDetails | null {
+  if (!json) return null;
+  const d = readDetails(json);
+  return {
+    lightGood: d.light_good ?? [],
+    lightAvoid: d.light_avoid ?? [],
+    wateringRule: d.watering_rule ?? null,
+    wateringTips: d.watering_tips ?? [],
+    thirstSigns: d.thirst_signs ?? null,
+    overwateringSigns: d.overwatering_signs ?? null,
+    humidityTips: d.humidity_tips ?? [],
+    tempIdeal: d.temp_ideal ?? null,
+    soilMix: d.soil_mix ?? [],
+    fertilizerFrequency: d.fertilizer_frequency ?? null,
+    fertilizerSeason: d.fertilizer_season ?? null,
+    fertilizerType: d.fertilizer_type ?? null,
+    repottingFrequency: d.repotting_frequency ?? null,
+    repottingSeason: d.repotting_season ?? null,
+    pruningTips: d.pruning_tips ?? [],
+    problems: d.problems ?? [],
+    keyTips: d.key_tips ?? [],
+    petRisk: d.pet_risk ?? null,
   };
 }
 
@@ -352,5 +519,6 @@ export function toDetail(db: Db, row: PlantRow, view: ViewContext): PlantDetail 
     createdVia: row.created_via,
     lastFertilizedAt: row.last_fertilize_at,
     events: listEvents(db, row.id),
+    photos: listPlantPhotos(db, row.id, row.photo),
   };
 }

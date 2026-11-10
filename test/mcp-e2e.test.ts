@@ -162,7 +162,15 @@ describe('MCP end to end', () => {
 
     const added = await client.callTool({
       name: 'add_plant',
-      arguments: { ...plantFields(), last_watered: '2026-11-08' },
+      arguments: {
+        ...plantFields(),
+        last_watered: '2026-11-08',
+        details: {
+          light_good: ['Fenêtre est'],
+          watering_rule: 'Quand les 3 premiers cm sont secs',
+          problems: [{ symptom: 'Feuilles jaunes', cause: "Excès d'eau" }],
+        },
+      },
     });
     expect(added.isError).toBeFalsy();
     const addedText = textOf(added);
@@ -188,6 +196,9 @@ describe('MCP end to end', () => {
       recent_events: { type: string; by: string }[];
     };
     expect(sheet.care_sheet.light).toBe('bright_indirect');
+    expect((sheet.care_sheet as unknown as { details: { wateringRule: string } }).details.wateringRule).toBe(
+      'Quand les 3 premiers cm sont secs',
+    );
     expect(sheet.recent_events[0]).toMatchObject({ type: 'water', by: 'Tony' });
 
     const listed = JSON.parse(textOf(await client.callTool({ name: 'list_plants', arguments: {} }))) as {

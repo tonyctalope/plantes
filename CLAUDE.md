@@ -30,9 +30,10 @@ Use Node 26 (`engines`). On Tony's machine `/usr/bin/node` is v22: prefix `PATH=
   intervals, snooze), `photos.ts` (sharp: auto-orient, strip metadata, WebP + thumbnail; upload capability links).
 - `src/mcp/` — `server.ts` builds a fresh `McpServer` per request (SDK v2, `createMcpHandler`, serves both 2025-era
   and 2026-07-28 clients); `http.ts` gates it with `requireBearerAuth` + our token verifier.
-- `src/oauth/` — authorization server: `clients.ts` (DCR restricted to `OAUTH_REDIRECT_HOSTS` + loopback; CIMD only
-  from `OAUTH_CIMD_HOSTS`), `tokens.ts` (pending requests bound to the browser session, codes, grants, rotating
-  refresh tokens with 60 s reuse grace), `routes.ts` (authorize, consent, token, revoke, register).
+- `src/oauth/` — authorization server: `clients.ts` (DCR and CIMD both restricted to the exact `OAUTH_REDIRECT_URIS`
+  - loopback; CIMD fetched only from `OAUTH_CIMD_HOSTS`, failures cached, stale fallback), `tokens.ts` (pending
+    requests bound to the browser session, codes, grants, rotating refresh tokens; a replay within 60 s gets the same
+    successor from an in-memory cache), `routes.ts` (authorize, consent, token, revoke, register).
 - `src/auth/` — Google OIDC via openid-client, sessions (hashed ids, `__Host-` cookie), allowlist re-checked on
   every request.
 - `src/push/` — Web Push (VAPID keys from env or generated into `app_settings`), daily reminders per member.
@@ -44,7 +45,12 @@ Use Node 26 (`engines`). On Tony's machine `/usr/bin/node` is v22: prefix `PATH=
 - Secrets (session ids, codes, tokens, upload tokens) are random 256-bit and stored **only as SHA-256 hashes**.
 - Never log query strings, Authorization headers or upload tokens (`accessLog` strips them).
 - Every state-changing `/api` route relies on the Origin check in `apiRoutes`; keep new routes under it.
-- The allowlist (`ALLOWED_EMAILS`) is checked at login, on each session use, on each MCP token use and refresh.
+- The allowlist (`ALLOWED_EMAILS`) is checked at login, on each session use, on each MCP token use and refresh, and
+  on upload links (a link dies with its creator's access).
+- Bodies: 256 KB global limit in `app.ts`; photo routes run their auth/link checks **before** their own 21 MB
+  `bodyLimit` (Hono buffers chunked bodies); `/mcp` relies on the SDK cap after the bearer check.
+- Anonymous endpoints only create bounded rows (login_states, oauth_requests, DCR clients with eviction); rate-limit
+  keys group IPv6 by /64 (`rateLimitKey`). MCP connections are limited per grant (120/min).
 - Server-rendered pages use `hono/html` (auto-escaping) and no JavaScript; the SPA must stay CSP-clean
   (no inline scripts, no external origins).
 

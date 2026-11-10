@@ -76,14 +76,18 @@ Chaque connexion apparaît dans Réglages → _Applications connectées_, d'où 
 - **Serveur d'autorisation MCP** ([spec 2026-07-28](https://modelcontextprotocol.io/specification/2026-07-28/basic/authorization)) :
   OAuth 2.1, PKCE S256 obligatoire, paramètre `iss` (RFC 9207), jetons liés à la ressource `/mcp` (RFC 8707),
   métadonnées RFC 8414 / RFC 9728. Enregistrement des clients par _Client ID Metadata Document_ (récupéré seulement
-  depuis `claude.ai`, `claude.com`, `anthropic.com`) ou par enregistrement dynamique **limité aux adresses de retour
-  de Claude et au loopback** — un site tiers ne peut pas se faire passer pour un client. Écran de consentement
-  explicite à chaque connexion.
+  depuis `claude.ai`, `claude.com`, `anthropic.com`) ou par enregistrement dynamique, dans les deux cas **limités aux
+  adresses de retour exactes de Claude et au loopback** — un site tiers ne peut pas se faire passer pour un client.
+  Écran de consentement explicite à chaque connexion.
 - **Jetons** : aléatoires 256 bits, stockés uniquement hachés (SHA-256) ; accès 1 h, rafraîchissement 90 jours avec
   rotation et détection de réutilisation (révocation de toute la connexion), rejeu d'un code = révocation.
 - **En-têtes** : CSP stricte (aucun script inline ni ressource externe), HSTS, `X-Frame-Options: DENY`,
-  `nosniff`, `Referrer-Policy`. Limitation de débit sur la connexion, l'OAuth et l'envoi de photos.
-- **Conteneur** : utilisateur non-root, système de fichiers en lecture seule, aucune capacité Linux.
+  `nosniff`, `Referrer-Policy`.
+- **Abus** : corps de requête limités (256 Ko, 20 Mo pour les photos, vérifiés avant lecture), limitation de débit
+  par IP (par /64 en IPv6) et par connexion Claude, plafonds de plantes, de liens photo et de lignes anonymes, une
+  seule photo décodée à la fois (anti « bombe » d'image).
+- **Conteneur** : utilisateur non-root, système de fichiers en lecture seule, aucune capacité Linux, mémoire et nombre
+  de processus plafonnés.
 
 ## Déploiement
 
@@ -116,7 +120,7 @@ npm install
 cp .env.example .env   # PUBLIC_URL=http://localhost:5173, NODE_ENV=development, DEV_LOGIN=1
 npm run dev            # API sur :8787
 npm run dev:web        # interface sur :5173 (proxy vers l'API)
-npm test               # 35 tests : OAuth, MCP de bout en bout avec le SDK client officiel, connexion OIDC…
+npm test               # 46 tests : OAuth, MCP de bout en bout avec le SDK client officiel, OIDC, sécurité…
 npm run typecheck
 ```
 

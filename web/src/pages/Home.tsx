@@ -173,13 +173,10 @@ export function Home() {
   async function snooze(days: number) {
     const plant = snoozeTarget;
     if (!plant) return;
-    try {
-      const detail = await api.snooze(plant.id, days);
-      replacePlant(detail);
-      toast({ message: `Rappel reporté : ${dueText(detail.water.daysUntilDue)}`, tone: 'success' });
-    } catch (reason) {
-      toast({ message: errorMessage(reason), tone: 'error' });
-    }
+    // Errors propagate to the sheet, which shows them inline.
+    const detail = await api.snooze(plant.id, days);
+    replacePlant(detail);
+    toast({ message: `Rappel reporté : ${dueText(detail.water.daysUntilDue)}`, tone: 'success' });
   }
 
   let summary = '';

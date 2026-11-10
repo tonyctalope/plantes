@@ -1,10 +1,26 @@
+import { TriangleAlert } from 'lucide-react';
 import { useState } from 'react';
 import type { CareType } from '../../../shared/api.ts';
+import { errorMessage } from '../lib/api.ts';
 import { careLabel } from '../lib/labels.ts';
 import { localTodayKey } from '../lib/format.ts';
 import { CareIcon } from './CareIcon.tsx';
 import { Dialog } from './Dialog.tsx';
 import { Button } from './ui.tsx';
+
+/** Error shown inside the sheet (toasts would sit behind the modal dialog). */
+function SheetError({ message }: { message: string | null }) {
+  if (!message) return null;
+  return (
+    <p
+      role="alert"
+      className="flex items-start gap-2 rounded-2xl bg-danger-soft px-3.5 py-2.5 text-sm font-medium text-danger"
+    >
+      <TriangleAlert className="mt-0.5 size-4 shrink-0" aria-hidden />
+      <span>{message}</span>
+    </p>
+  );
+}
 
 const snoozeChoices: { days: number; label: string }[] = [
   { days: 1, label: 'Demain' },
@@ -25,27 +41,35 @@ export function SnoozeSheet({
   onSnooze: (days: number) => Promise<void>;
 }) {
   const [busy, setBusy] = useState<number | null>(null);
+  const [error, setError] = useState<string | null>(null);
 
   async function choose(days: number) {
     setBusy(days);
+    setError(null);
     try {
       await onSnooze(days);
       onClose();
-    } catch {
-      // The caller already reported the error; keep the sheet open to retry.
+    } catch (reason) {
+      setError(errorMessage(reason)); // keep the sheet open to retry
     } finally {
       setBusy(null);
     }
   }
 
+  function close() {
+    setError(null);
+    onClose();
+  }
+
   return (
     <Dialog
       open={open}
-      onClose={onClose}
+      onClose={close}
       title={`Reporter « ${plantName} »`}
       description="La terre est encore humide ? Décale le prochain rappel d'arrosage."
     >
-      <div className="grid grid-cols-2 gap-2">
+      <SheetError message={error} />
+      <div className={`grid grid-cols-2 gap-2 ${error ? 'mt-3' : ''}`}>
         {snoozeChoices.map((choice) => (
           <Button
             key={choice.days}
@@ -87,10 +111,17 @@ export function CareSheet({
   const [note, setNote] = useState('');
   const [date, setDate] = useState(localTodayKey());
   const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
   const today = localTodayKey();
+
+  function close() {
+    setError(null);
+    onClose();
+  }
 
   async function submit() {
     setBusy(true);
+    setError(null);
     try {
       const draft: CareDraft = { type };
       const trimmed = note.trim();
@@ -101,15 +132,15 @@ export function CareSheet({
       setNote('');
       setDate(localTodayKey());
       onClose();
-    } catch {
-      // The caller already reported the error; keep the sheet open to retry.
+    } catch (reason) {
+      setError(errorMessage(reason)); // keep the sheet open to retry
     } finally {
       setBusy(false);
     }
   }
 
   return (
-    <Dialog open={open} onClose={onClose} title="Noter un soin" description={plantName}>
+    <Dialog open={open} onClose={close} title="Noter un soin" description={plantName}>
       <form
         onSubmit={(event) => {
           event.preventDefault();
@@ -165,8 +196,9 @@ export function CareSheet({
             className="w-full resize-y rounded-2xl border border-line bg-surface px-3.5 py-2.5 text-ink placeholder:text-ink-3 focus:border-brand focus:outline-none"
           />
         </label>
+        <SheetError message={error} />
         <div className="flex justify-end gap-2">
-          <Button variant="outline" onClick={onClose}>
+          <Button variant="outline" onClick={close}>
             Annuler
           </Button>
           <Button type="submit" loading={busy}>
@@ -194,15 +226,22 @@ export function ArchiveSheet({
   const [choice, setChoice] = useState<(typeof archiveReasons)[number] | null>(null);
   const [other, setOther] = useState('');
   const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  function close() {
+    setError(null);
+    onClose();
+  }
 
   async function submit() {
     setBusy(true);
+    setError(null);
     try {
       const reason = choice === 'Autre' ? other.trim() || undefined : (choice ?? undefined);
       await onArchive(reason);
       onClose();
-    } catch {
-      // The caller already reported the error; keep the sheet open to retry.
+    } catch (reason) {
+      setError(errorMessage(reason)); // keep the sheet open to retry
     } finally {
       setBusy(false);
     }
@@ -211,7 +250,7 @@ export function ArchiveSheet({
   return (
     <Dialog
       open={open}
-      onClose={onClose}
+      onClose={close}
       title={`Archiver « ${plantName} » ?`}
       description="Elle disparaît de la liste et des rappels. Son historique est conservé et tu pourras la restaurer depuis les archives."
     >
@@ -259,8 +298,9 @@ export function ArchiveSheet({
             className="h-11 w-full rounded-2xl border border-line bg-surface px-3.5 text-ink placeholder:text-ink-3 focus:border-brand focus:outline-none"
           />
         )}
+        <SheetError message={error} />
         <div className="flex justify-end gap-2">
-          <Button variant="outline" onClick={onClose}>
+          <Button variant="outline" onClick={close}>
             Annuler
           </Button>
           <Button type="submit" loading={busy}>

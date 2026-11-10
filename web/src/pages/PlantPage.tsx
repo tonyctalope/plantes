@@ -150,24 +150,16 @@ export function PlantPage({ id }: { id: number }) {
   }
 
   async function snooze(days: number) {
-    try {
-      const detail = await api.snooze(id, days);
-      setData(detail);
-      toast({ message: `Rappel reporté : ${dueText(detail.water.daysUntilDue)}`, tone: 'success' });
-    } catch (reason) {
-      toast({ message: errorMessage(reason), tone: 'error' });
-      throw reason;
-    }
+    // Errors propagate to the sheet, which shows them inline.
+    const detail = await api.snooze(id, days);
+    setData(detail);
+    toast({ message: `Rappel reporté : ${dueText(detail.water.daysUntilDue)}`, tone: 'success' });
   }
 
   async function submitCare(draft: CareDraft) {
-    try {
-      setData(await api.care(id, draft));
-      toast({ message: `Soin enregistré : ${careLabel[draft.type].toLowerCase()}`, tone: 'success' });
-    } catch (reason) {
-      toast({ message: errorMessage(reason), tone: 'error' });
-      throw reason;
-    }
+    // Errors propagate to the sheet, which shows them inline.
+    setData(await api.care(id, draft));
+    toast({ message: `Soin enregistré : ${careLabel[draft.type].toLowerCase()}`, tone: 'success' });
   }
 
   async function confirmRemoveEvent(event: CareEvent) {
@@ -218,25 +210,21 @@ export function PlantPage({ id }: { id: number }) {
   }
 
   async function archive(reason: string | undefined) {
-    try {
-      await api.archive(id, reason);
-      navigate('/', { replace: true });
-      toast({
-        message: `« ${current.nickname} » est archivée`,
-        tone: 'success',
-        action: {
-          label: 'Annuler',
-          onClick: () =>
-            void api
-              .unarchive(id)
-              .then(() => navigate(`/plante/${id}`))
-              .catch((failure: unknown) => toast({ message: errorMessage(failure), tone: 'error' })),
-        },
-      });
-    } catch (failure) {
-      toast({ message: errorMessage(failure), tone: 'error' });
-      throw failure;
-    }
+    // Errors propagate to the sheet, which shows them inline.
+    await api.archive(id, reason);
+    navigate('/', { replace: true });
+    toast({
+      message: `« ${current.nickname} » est archivée`,
+      tone: 'success',
+      action: {
+        label: 'Annuler',
+        onClick: () =>
+          void api
+            .unarchive(id)
+            .then(() => navigate(`/plante/${id}`))
+            .catch((failure: unknown) => toast({ message: errorMessage(failure), tone: 'error' })),
+      },
+    });
   }
 
   async function unarchive() {

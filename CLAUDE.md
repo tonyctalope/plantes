@@ -30,10 +30,10 @@ Use Node 26 (`engines`). On Tony's machine `/usr/bin/node` is v22: prefix `PATH=
   intervals, snooze), `photos.ts` (sharp: auto-orient, strip metadata, WebP + thumbnail; upload capability links).
 - `src/mcp/` — `server.ts` builds a fresh `McpServer` per request (SDK v2, `createMcpHandler`, serves both 2025-era
   and 2026-07-28 clients); `http.ts` gates it with `requireBearerAuth` + our token verifier.
-- `src/oauth/` — authorization server: `clients.ts` (DCR and CIMD both restricted to the exact `OAUTH_REDIRECT_URIS`
-  - loopback; CIMD fetched only from `OAUTH_CIMD_HOSTS`, failures cached, stale fallback), `tokens.ts` (pending
-    requests bound to the browser session, codes, grants, rotating refresh tokens; a replay within 60 s gets the same
-    successor from an in-memory cache), `routes.ts` (authorize, consent, token, revoke, register).
+- `src/oauth/` — authorization server: `clients.ts` (DCR and CIMD both restricted to loopback and the exact
+  `OAUTH_REDIRECT_URIS`; CIMD fetched only from `OAUTH_CIMD_HOSTS`, failures cached, stale fallback), `tokens.ts`
+  (pending requests bound to the browser session, codes, grants, rotating refresh tokens; a replay within 60 s gets
+  the same successor from an in-memory cache), `routes.ts` (authorize, consent, token, revoke, register).
 - `src/auth/` — Google OIDC via openid-client, sessions (hashed ids, `__Host-` cookie), allowlist re-checked on
   every request.
 - `src/push/` — Web Push (VAPID keys from env or generated into `app_settings`), daily reminders per member.
